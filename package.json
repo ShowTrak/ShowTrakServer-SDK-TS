@@ -1,6 +1,6 @@
 {
   "name": "@showtrak/server-sdk",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "TypeScript SDK for controlling a ShowTrak Server over its WebSocket control API.",
   "license": "MIT",
   "type": "module",
