@@ -1,101 +1,149 @@
-# ShowTrak Server SDK (TypeScript)
+# ShowTrak Server SDK
 
-A standalone TypeScript SDK for controlling a **ShowTrak Server** instance in
-real time over its WebSocket control API (the server's `/sdk` Socket.IO
-namespace). It provides:
+TypeScript SDK for controlling a [ShowTrak Server][showtrak] instance in real
+time over its WebSocket control API.
 
-- **Shared constants** — default ports, the 8-colour palette, status colours —
-  so every integration (Companion module, future apps) stays consistent.
-- **A typed wire protocol** — command names, argument shapes, push channels.
-- **`ShowTrakControlClient`** — connect, send slug-based commands, and read live
-  status/label feedback from local caches kept in sync by server pushes.
+Connect to a running server, send commands, and read live status that stays in
+sync through server pushes — with full type definitions throughout.
 
-## Install / usage
+[showtrak]: https://showtrak.co.uk
 
-```ts
-import { ShowTrakControlClient } from '@showtrak/server-sdk';
-
-const client = new ShowTrakControlClient();
-client.on('connect', () => console.log('connected'));
-client.on('clientsChanged', () => {
-  console.log(client.getClientStatus('stage-left')); // 'ONLINE' | 'DEGRADED' | ...
-});
-client.connect({ host: '192.168.1.50', port: 3000, apiKey: 'xxxx' });
-
-await client.runScriptOnClient('stage-left', 'reboot');
-await client.enterEditMode();
-```
-
-All targeting is by **slug**, never UUID — clients, groups, tags by slug and
-scripts/events by their slug (script folder ID / integrated action ID).
-
-## Releasing
-
-The SDK is distributed through npm as [`@showtrak/server-sdk`][npm]. Consumers
-install it like any other dependency and import the package name — there is no
-vendoring or copy step.
+## Install
 
 ```bash
 npm install @showtrak/server-sdk
 ```
 
-To cut a release: bump the version, then publish. `prepublishOnly` builds and
-runs the suite first, so a failing test blocks the release.
+Requires Node 20 or newer. Ships as ESM with bundled type definitions.
 
-```bash
-npm version patch   # or minor / major
-npm publish --access public
-git push --follow-tags
+## Quick start
+
+```ts
+import { ShowTrakControlClient } from '@showtrak/server-sdk';
+
+const client = new ShowTrakControlClient();
+
+client.on('connect', () => console.log('connected'));
+client.on('clientsChanged', () => {
+  console.log(client.getClientStatus('stage-left')); // 'ONLINE' | 'DEGRADED' | ...
+});
+
+client.connect({ host: '192.168.1.50', apiKey: 'your-api-key' });
+
+await client.runScriptOnClient('stage-left', 'reboot');
+await client.enterShowMode();
 ```
 
-Publishing requires 2FA — npm prints a browser URL to confirm with a passkey.
+Everything is targeted by **slug** — clients, groups and tags by their slug,
+scripts and events by theirs. Slugs are stable, human-readable identifiers you
+can hardcode in an integration; UUIDs are never part of this API.
 
-[npm]: https://www.npmjs.com/package/@showtrak/server-sdk
+## Connecting
 
-## Keeping constants in sync
+```ts
+client.connect({
+  host: '192.168.1.50',
+  port: 3000,      // optional, defaults to 3000
+  apiKey: 'xxxx',  // required — the server refuses unauthenticated connections
+  reconnect: true, // optional, defaults to true
+});
 
-This SDK is standalone: the ShowTrak Server does **not** import it, so
-`src/constants.ts` is a hand-maintained mirror of the server's authoritative
-values. When these change on the server, update them here too:
-
-| Constant       | Server source                         |
-| -------------- | ------------------------------------- |
-| Ports          | `src/Modules/Config/constants.ts`     |
-| Colour palette | `src/Modules/ScriptManager/schema.ts` |
-| Status colours | `src/UI/css/parts/01-base.css`        |
-
-## Testing
-
-```bash
-npm test          # build, then run the whole suite
-npm run test:watch
+client.disconnect();
 ```
 
-Tests use the built-in Node test runner (`node --test`) — no framework
-dependency — matching the ShowTrak Server's own suite. `pretest` compiles
-first, so tests exercise the **built** `dist/` output that consumers actually
-import, not the TypeScript source.
+`disconnect()` clears every cache, so stale state never outlives a session.
+Calling `connect()` again replaces the existing session rather than stacking
+connections.
 
-| File                         | Covers                                                        |
-| ---------------------------- | ------------------------------------------------------------- |
-| `constants.test.js`          | Palette/port/status constants and their fallbacks             |
-| `status-helpers.test.js`     | `DeriveClientStatus` / `ClientLabel` precedence rules         |
-| `client-lifecycle.test.js`   | Handshake auth, state transitions, teardown, event delivery   |
-| `client-cache.test.js`       | Client/monitor/dummy cache isolation, re-slugging, bad pushes |
-| `client-aggregation.test.js` | Group / tag / workspace status rollup                         |
-| `client-commands.test.js`    | Every command method's wire name + args, and ack handling     |
+## Events
 
-Connection-level tests run against a **real Socket.IO server** on an ephemeral
-port ([`test/helpers/fake-server.js`](./test/helpers/fake-server.js)) that
-mirrors the server's `/sdk` namespace contract — API-key middleware, the
-`command` event's ack, and push emission. That means the transport path is
-genuinely exercised rather than mocked away.
+Subscribe with `on()`, which returns an unsubscribe function.
 
-Two drift guards are worth knowing about:
+```ts
+const off = client.on('clientsChanged', () => refreshUI());
+off(); // stop listening
+```
 
-- `client-commands.test.js` parses the `CommandArgs` interface out of
-  `src/protocol.ts` at test time and asserts every declared command has a method
-  exercised by the table. Adding a command to the protocol without an SDK method
-  fails the suite instead of passing unnoticed.
-- The `CommandName` union means a typo'd command name fails to **compile**, so
-  `pretest` catches it before any test runs.
+| Event            | Payload                              | Fires when                     |
+| ---------------- | ------------------------------------ | ------------------------------ |
+| `connect`        | —                                    | The session is established     |
+| `disconnect`     | `reason`                             | The session drops              |
+| `error`          | `message`                            | Auth or transport fails        |
+| `stateChanged`   | `state`                              | Connection state transitions   |
+| `clientsChanged` | —                                    | Any client's state changes     |
+| `tagsChanged`    | —                                    | Tags are added/removed/edited  |
+| `scriptsChanged` | —                                    | The script list changes        |
+| `modeChanged`    | `mode`                               | The server enters SHOW/EDIT    |
+| `alertsChanged`  | `enabled`                            | Alerts are toggled             |
+| `notify`         | `message`, `type`, `duration`        | The server raises a toast      |
+
+A throwing listener never blocks the others.
+
+## Reading state
+
+The client keeps local caches updated by server pushes, so reads are
+synchronous and cheap.
+
+```ts
+client.getClient('stage-left');           // full ClientView, or undefined
+client.getAllClients();
+client.getClientStatus('stage-left');     // 'ONLINE' | 'DEGRADED' | 'OFFLINE' | 'IDLE'
+client.getClientLabel('stage-left');      // nickname → hostname → slug → UUID
+client.getClientStatusColour('stage-left'); // hex, for UI tiles
+client.getClientStatusRgb('stage-left');    // [r, g, b], for hardware surfaces
+
+client.getGroupStatus('front-of-house');  // rolled-up status
+client.getTagStatus('projectors');
+client.getAllStatus();                    // whole workspace
+
+client.getGroups();
+client.getTags();
+client.getScripts();
+client.getMode();                         // 'SHOW' | 'EDIT'
+client.getAlertsEnabled();
+client.getState();                        // 'disconnected' | 'connecting' | ...
+client.isConnected();
+```
+
+## Commands
+
+Every command returns `Promise<CommandResult>` (`{ ok, detail }`) once the
+server acknowledges it.
+
+| Area        | Methods                                                                                  |
+| ----------- | ---------------------------------------------------------------------------------------- |
+| Wake-on-LAN | `wolAll`, `wolClient`, `wolGroup`, `wolTag`                                               |
+| Scripts     | `runScriptOnAll`, `runScriptOnClient`, `runScriptOnGroup`, `runScriptOnTag`               |
+| Events      | `triggerEventOnAll`, `triggerEventOnClient`, `triggerEventOnGroup`, `triggerEventOnTag`   |
+| Alerts      | `alertsOn`, `alertsOff`, `alertsToggle`                                                   |
+| Mode        | `enterShowMode`, `enterEditMode`, `toggleMode`                                            |
+| View        | `enterCompactView`, `enterExpandedView`, `toggleView`                                     |
+| Modals      | `openClientModal`, `closeAllModals`                                                       |
+| Show        | `saveShow`                                                                                |
+| System      | `shutdownServer`, `forceShutdownServer`                                                   |
+
+Targeted variants take the slug first: `runScriptOnGroup(groupSlug, scriptSlug)`.
+
+## Helpers and constants
+
+```ts
+import {
+  DEFAULT_SERVER_PORT,
+  COLOUR_PALETTE,
+  ScriptColourHex,
+  StatusRgb,
+  DeriveClientStatus,
+  ClientLabel,
+} from '@showtrak/server-sdk';
+```
+
+`COLOUR_PALETTE` is the 8-colour palette scripts and tags index into, and the
+status helpers resolve the same colours the ShowTrak UI paints — so an
+integration can match the server's appearance exactly.
+
+## Licence
+
+MIT © ShowTrak. See [LICENSE](./LICENSE).
+
+Note that the ShowTrak Server application itself is licensed separately under
+AGPL-3.0-only; this SDK is MIT so integrations can use it freely.
