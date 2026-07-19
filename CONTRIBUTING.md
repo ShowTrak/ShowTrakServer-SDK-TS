@@ -58,8 +58,9 @@ The SDK is distributed through npm as `@showtrak/server-sdk`. There is no
 vendoring or copy-deploy step — consumers install it like any other dependency.
 
 Releases are automated: pushing a `v*` tag triggers
-[`.github/workflows/publish.yml`](./.github/workflows/publish.yml), which tests
-and publishes with build provenance.
+[`.github/workflows/publish.yml`](./.github/workflows/publish.yml), which tests,
+publishes to npm with build provenance, and then creates the matching GitHub
+release with notes generated from the commits since the previous tag.
 
 ```bash
 npm version patch   # or minor / major — commits and tags

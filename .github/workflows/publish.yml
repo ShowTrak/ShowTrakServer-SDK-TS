@@ -20,7 +20,7 @@ jobs:
     # Must match the environment configured on the npm trusted publisher.
     environment: release
     permissions:
-      contents: read
+      contents: write # required to create the GitHub release
       id-token: write # required for provenance and trusted publishing
 
     steps:
@@ -58,3 +58,30 @@ jobs:
 
       - name: Publish
         run: npm publish --provenance --access public
+
+      # Runs only after a successful publish, so a release never advertises a
+      # version that is not actually on npm. --generate-notes appends the
+      # commits since the previous tag to the install snippet below.
+      - name: Create GitHub release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          PKG="https://www.npmjs.com/package/@showtrak/server-sdk/v/${VERSION}"
+
+          # Written to a file rather than passed inline so the markdown is not
+          # sensitive to this block's indentation.
+          cat > /tmp/notes.md <<EOF
+          Published to npm as [\`@showtrak/server-sdk@${VERSION}\`](${PKG}), with build provenance.
+
+          \`\`\`bash
+          npm install @showtrak/server-sdk
+          \`\`\`
+          EOF
+
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
+            --verify-tag \
+            --generate-notes \
+            --notes-file /tmp/notes.md
