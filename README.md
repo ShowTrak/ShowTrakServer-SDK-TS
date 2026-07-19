@@ -29,16 +29,28 @@ await client.enterEditMode();
 All targeting is by **slug**, never UUID — clients, groups, tags by slug and
 scripts/events by their slug (script folder ID / integrated action ID).
 
-## Deployment (copy into consumers)
+## Releasing
 
-The SDK is **not** consumed as a git submodule. Instead its build output
-(`dist/`) is copied ("deployed") into each consuming project listed in
-[`sdk.deploy.json`](./sdk.deploy.json). Consumers import the vendored folder
-(e.g. `./showtrak-sdk/index.js`) and compile it with their own toolchain.
+The SDK is distributed through npm as [`@showtrak/server-sdk`][npm]. Consumers
+install it like any other dependency and import the package name — there is no
+vendoring or copy step.
 
-- `npm run deploy` — build once and copy `dist/` into every target.
-- `npm run deploy:watch` — rebuild + redeploy automatically on every `src/`
-  change (dev loop). Targets are **wiped and replaced** on each deploy.
+```bash
+npm install @showtrak/server-sdk
+```
+
+To cut a release: bump the version, then publish. `prepublishOnly` builds and
+runs the suite first, so a failing test blocks the release.
+
+```bash
+npm version patch   # or minor / major
+npm publish --access public
+git push --follow-tags
+```
+
+Publishing requires 2FA — npm prints a browser URL to confirm with a passkey.
+
+[npm]: https://www.npmjs.com/package/@showtrak/server-sdk
 
 ## Keeping constants in sync
 

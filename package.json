@@ -17,12 +17,11 @@
   ],
   "scripts": {
     "build": "rm -rf dist && tsc -p tsconfig.json",
-    "deploy": "npm run build && node scripts/deploy.js",
-    "deploy:watch": "node scripts/watch.js",
     "format": "prettier -w .",
     "pretest": "npm run build",
     "test": "node --test \"test/**/*.test.js\"",
-    "test:watch": "node --test --watch \"test/**/*.test.js\""
+    "test:watch": "node --test --watch \"test/**/*.test.js\"",
+    "prepublishOnly": "npm test"
   },
   "dependencies": {
     "socket.io-client": "^4.7.5"
