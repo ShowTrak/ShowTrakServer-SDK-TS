@@ -28,12 +28,14 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           registry-url: https://registry.npmjs.org
 
-      # Trusted publishing needs npm 11.5.1+; Node 20 ships npm 10.
+      # Trusted publishing needs npm 11.5.1+, and Node 22 ships npm 10. Pinned
+      # to the 11 major rather than @latest: npm 12 requires Node >=22.22, so
+      # @latest silently breaks whenever npm's floor moves past our runtime.
       - name: Update npm
-        run: npm install -g npm@latest
+        run: npm install -g npm@^11
 
       - name: Install dependencies
         run: npm ci
@@ -41,6 +43,7 @@ jobs:
       # Catches a tag that disagrees with the version being published, which
       # would otherwise ship silently under the wrong number.
       - name: Verify tag matches package version
+        if: startsWith(github.ref, 'refs/tags/')
         run: |
           TAG="${GITHUB_REF_NAME#v}"
           PKG="$(node -p "require('./package.json').version")"
