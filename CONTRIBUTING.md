@@ -57,17 +57,34 @@ Two drift guards are worth knowing about:
 The SDK is distributed through npm as `@showtrak/server-sdk`. There is no
 vendoring or copy-deploy step — consumers install it like any other dependency.
 
+Releases are automated: pushing a `v*` tag triggers
+[`.github/workflows/publish.yml`](./.github/workflows/publish.yml), which tests
+and publishes with build provenance.
+
 ```bash
-npm version patch   # or minor / major
-npm publish --access public
+npm version patch   # or minor / major — commits and tags
 git push --follow-tags
 ```
 
-`prepublishOnly` builds and runs the suite, so a failing test blocks a release.
+The workflow refuses to publish if the tag disagrees with `package.json`, so a
+mistagged release fails loudly instead of shipping under the wrong number.
 
-Publishing requires 2FA. npm prints a browser URL to confirm with a passkey —
-run `npm publish` **interactively**, because the CLI redacts that URL when its
-output is piped or captured, leaving nothing to click.
+Authentication uses npm **trusted publishing** (OIDC) — there is no `NPM_TOKEN`
+secret. It is configured once on npmjs.com under the package's Trusted Publisher
+settings, pointing at this repo and `publish.yml`.
+
+### Publishing by hand
+
+Only needed if Actions is unavailable. Publishing requires 2FA, and npm prints a
+browser URL to confirm with a passkey — run it **interactively**, because the CLI
+redacts that URL when its output is piped or captured, leaving nothing to click.
+
+```bash
+npm publish --access public
+```
+
+`prepublishOnly` builds and runs the suite either way, so a failing test blocks
+a release.
 
 When the public API changes, update the README's command and event tables to
 match; they are hand-maintained and nothing fails if they drift.

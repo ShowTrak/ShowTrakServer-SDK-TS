@@ -1,0 +1,55 @@
+name: Publish
+
+# Publishes to npm when a v* tag is pushed, with build provenance so the npm
+# page links back to the exact repo, commit and workflow run that produced the
+# tarball.
+#
+# Authentication uses npm trusted publishing (OIDC) — there is no NPM_TOKEN.
+# This requires a one-time setup on npmjs.com: package settings -> Trusted
+# Publisher -> GitHub Actions, pointing at this repo and this workflow file.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # required for provenance and trusted publishing
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org
+
+      # Trusted publishing needs npm 11.5.1+; Node 20 ships npm 10.
+      - name: Update npm
+        run: npm install -g npm@latest
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Catches a tag that disagrees with the version being published, which
+      # would otherwise ship silently under the wrong number.
+      - name: Verify tag matches package version
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          PKG="$(node -p "require('./package.json').version")"
+          if [ "$TAG" != "$PKG" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match package.json version $PKG"
+            exit 1
+          fi
+          echo "Publishing $PKG"
+
+      - name: Test
+        run: npm test
+
+      - name: Publish
+        run: npm publish --provenance --access public
