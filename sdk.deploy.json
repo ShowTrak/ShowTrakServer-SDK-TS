@@ -1,0 +1,10 @@
+{
+  "//": "Destinations the built SDK (dist/) is copied into. Each target's folder is wiped and replaced on every deploy. Paths are relative to this repo root.",
+  "targets": [
+    {
+      "name": "companion-module",
+      "from": "src",
+      "to": "../ShowTrak-Server-Companion/src/showtrak-sdk"
+    }
+  ]
+}

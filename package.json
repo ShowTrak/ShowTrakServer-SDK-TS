@@ -1,0 +1,71 @@
+{
+  "name": "@showtrak/server-sdk",
+  "version": "0.1.0",
+  "description": "TypeScript SDK for controlling a ShowTrak Server over its WebSocket control API.",
+  "license": "MIT",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "rm -rf dist && tsc -p tsconfig.json",
+    "deploy": "npm run build && node scripts/deploy.js",
+    "deploy:watch": "node scripts/watch.js",
+    "format": "prettier -w .",
+    "pretest": "npm run build",
+    "test": "node --test \"test/**/*.test.js\"",
+    "test:watch": "node --test --watch \"test/**/*.test.js\""
+  },
+  "dependencies": {
+    "socket.io-client": "^4.7.5"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "prettier": "^3.3.0",
+    "socket.io": "^4.8.3",
+    "typescript": "^5.7.0"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "prettier": {
+    "printWidth": 100,
+    "singleQuote": true,
+    "trailingComma": "es5",
+    "semi": true,
+    "arrowParens": "always",
+    "endOfLine": "lf"
+  },
+  "author": {
+    "name": "ShowTrak",
+    "email": "tom@tkw.bz",
+    "url": "https://tkw.bz/"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ShowTrak/ShowTrakServer-SDK-TS.git"
+  },
+  "homepage": "https://showtrak.co.uk",
+  "bugs": {
+    "url": "https://github.com/ShowTrak/ShowTrakServer-SDK-TS/issues",
+    "email": "tom@tkw.bz"
+  },
+  "keywords": [
+    "showtrak",
+    "sdk",
+    "socket.io",
+    "osc",
+    "remote-control",
+    "device-management",
+    "typescript",
+    "show-control"
+  ]
+}
