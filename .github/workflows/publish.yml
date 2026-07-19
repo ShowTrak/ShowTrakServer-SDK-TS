@@ -17,7 +17,12 @@ on:
 jobs:
   publish:
     runs-on: ubuntu-latest
-    # Must match the environment configured on the npm trusted publisher.
+    # Must match the environment configured on the npm trusted publisher on
+    # npmjs.com. Removing this breaks OIDC auth: npm checks the environment
+    # claim, and the token only carries one if the job declares it. Editors
+    # sometimes flag this line as an unknown environment — that is a false
+    # positive; the environment exists on the repo.
+    environment: release
     permissions:
       contents: write # required to create the GitHub release
       id-token: write # required for provenance and trusted publishing
