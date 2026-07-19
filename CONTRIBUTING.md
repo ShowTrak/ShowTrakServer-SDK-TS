@@ -71,7 +71,7 @@ mistagged release fails loudly instead of shipping under the wrong number.
 
 Authentication uses npm **trusted publishing** (OIDC) — there is no `NPM_TOKEN`
 secret. It is configured once on npmjs.com under the package's Trusted Publisher
-settings, pointing at this repo and `publish.yml`.
+settings, pointing at this repo, `publish.yml`, and the `release` environment.
 
 ### Publishing by hand
 
