@@ -18,7 +18,6 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     # Must match the environment configured on the npm trusted publisher.
-    environment: release
     permissions:
       contents: write # required to create the GitHub release
       id-token: write # required for provenance and trusted publishing
