@@ -162,6 +162,58 @@ test('a tag with no scope falls back to covering everything', async (t) => {
   assert.equal(client.getTagStatus('legacy'), 'OFFLINE');
 });
 
+test('a tag that absorbs another tag covers that tag’s members', async (t) => {
+  // The superset case: "all-av" names "video", which names the machine. Without
+  // the expansion the Companion button for the superset would read OFFLINE-empty
+  // while the server happily dispatches to it.
+  const { server, client } = await startConnected(t);
+  await seed(server, client, [
+    inGroup(1, { Slug: 'a', Online: true }),
+    inGroup(2, { Slug: 'b', Online: false }),
+  ]);
+  server.push('SetTagList', [
+    { TagID: 1, Slug: 'all-av', Scope: { Workspace: false, Groups: [], Clients: [], Tags: [2] } },
+    {
+      TagID: 2,
+      Slug: 'video',
+      Scope: { Workspace: false, Groups: [], Clients: ['u-b'], Tags: [] },
+    },
+  ]);
+  await waitFor(() => client.getTags().length === 2, { label: 'tags cached' });
+
+  assert.equal(client.getTagStatus('all-av'), 'OFFLINE', 'covers only the offline u-b');
+});
+
+test('two tags naming each other resolve instead of hanging', async (t) => {
+  const { server, client } = await startConnected(t);
+  await seed(server, client, [
+    inGroup(1, { Slug: 'a', Online: true }),
+    inGroup(2, { Slug: 'b', Online: false }),
+  ]);
+  server.push('SetTagList', [
+    { TagID: 1, Slug: 'loop-a', Scope: { Workspace: false, Groups: [], Clients: [], Tags: [2] } },
+    {
+      TagID: 2,
+      Slug: 'loop-b',
+      Scope: { Workspace: false, Groups: [], Clients: ['u-a'], Tags: [1] },
+    },
+  ]);
+  await waitFor(() => client.getTags().length === 2, { label: 'tags cached' });
+
+  assert.equal(client.getTagStatus('loop-a'), 'ONLINE');
+});
+
+test('a tag naming a tag that no longer exists covers nothing extra', async (t) => {
+  const { server, client } = await startConnected(t);
+  await seed(server, client, [inGroup(1, { Slug: 'a', Online: true })]);
+  server.push('SetTagList', [
+    { TagID: 1, Slug: 'stale', Scope: { Workspace: false, Groups: [], Clients: [], Tags: [99] } },
+  ]);
+  await waitFor(() => client.getTags().length === 1, { label: 'tag cached' });
+
+  assert.equal(client.getTagStatus('stale'), 'OFFLINE', 'a dangling reference must not widen it');
+});
+
 test('a tag matching no clients reads OFFLINE', async (t) => {
   const { server, client } = await startConnected(t);
   await seed(server, client, [inGroup(1, { Slug: 'a', Online: true })]);

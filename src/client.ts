@@ -231,12 +231,30 @@ export class ShowTrakControlClient {
   }
 
   /** True when a client falls inside a tag's dynamic scope. Mirrors the server's
-   *  ScriptWhitelistManager.IsClientAllowed so companion feedback matches dispatch. */
-  private clientInTagScope(scope: TagScope | undefined, client: ClientView): boolean {
+   *  ScriptWhitelistManager.IsClientAllowed so companion feedback matches dispatch.
+   *
+   *  A tag may absorb other tags (making it a superset of them), so this is a
+   *  graph walk rather than a lookup. `visited` breaks the cycle an operator can
+   *  author by adding each of two tags to the other. */
+  private clientInTagScope(
+    scope: TagScope | undefined,
+    client: ClientView,
+    visited: Set<number> = new Set()
+  ): boolean {
     if (!scope || scope.Workspace) return true;
     if (!client || !client.UUID) return false;
     if (scope.Clients.includes(client.UUID)) return true;
     if (client.GroupID != null && scope.Groups.includes(Number(client.GroupID))) return true;
+    for (const raw of Array.isArray(scope.Tags) ? scope.Tags : []) {
+      const tagID = Number(raw);
+      if (!Number.isInteger(tagID) || visited.has(tagID)) continue;
+      visited.add(tagID);
+      const nested = this.getTags().find((t) => Number(t.TagID) === tagID);
+      // An unknown TagID (deleted tag still named by a stale scope) contributes
+      // no members — it must never widen the scope.
+      if (!nested || !nested.Scope) continue;
+      if (this.clientInTagScope(nested.Scope, client, visited)) return true;
+    }
     return false;
   }
 

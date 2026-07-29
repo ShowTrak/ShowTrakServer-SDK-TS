@@ -11,7 +11,18 @@ export interface IntegratedAction {
   ID: string;
   Label: string;
   ColourIndex: number;
+  /**
+   * Bare Bootstrap Icons name (no `bi-` prefix). Older servers omit it
+   * entirely; newer ones default it to `"terminal"` when the integrated client
+   * declares none.
+   */
+  Icon?: string;
   HasFeedback: boolean;
+  /**
+   * The integrated client's own handler timeout in milliseconds. Absent on
+   * older servers; newer ones default it when the client declares none.
+   */
+  TimeoutMs?: number;
 }
 
 /**
@@ -49,13 +60,18 @@ export interface GroupView {
 
 /**
  * A tag's dynamic membership rule. Workspace:true means "every client"; otherwise
- * a client is a member if its UUID is whitelisted or its group is. Mirrors the
- * server-side TagScope so membership can be resolved client-side.
+ * a client is a member if its UUID is whitelisted, its group is, or it carries
+ * one of the tags this tag absorbs. Mirrors the server-side TagScope so
+ * membership can be resolved client-side.
+ *
+ * `Tags` is optional: an older server omits it, and an absent list means "no
+ * tags", never "all".
  */
 export interface TagScope {
   Workspace: boolean;
   Groups: number[];
   Clients: string[];
+  Tags?: number[];
 }
 
 /** Public projection of a tag. */
