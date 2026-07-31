@@ -43,8 +43,8 @@ can hardcode in an integration; UUIDs are never part of this API.
 ```ts
 client.connect({
   host: '192.168.1.50',
-  port: 3000,      // optional, defaults to 3000
-  apiKey: 'xxxx',  // required — the server refuses unauthenticated connections
+  port: 3000, // optional, defaults to 3000
+  apiKey: 'xxxx', // required — the server refuses unauthenticated connections
   reconnect: true, // optional, defaults to true
 });
 
@@ -64,18 +64,18 @@ const off = client.on('clientsChanged', () => refreshUI());
 off(); // stop listening
 ```
 
-| Event            | Payload                              | Fires when                     |
-| ---------------- | ------------------------------------ | ------------------------------ |
-| `connect`        | —                                    | The session is established     |
-| `disconnect`     | `reason`                             | The session drops              |
-| `error`          | `message`                            | Auth or transport fails        |
-| `stateChanged`   | `state`                              | Connection state transitions   |
-| `clientsChanged` | —                                    | Any client's state changes     |
-| `tagsChanged`    | —                                    | Tags are added/removed/edited  |
-| `scriptsChanged` | —                                    | The script list changes        |
-| `modeChanged`    | `mode`                               | The server enters SHOW/EDIT    |
-| `alertsChanged`  | `enabled`                            | Alerts are toggled             |
-| `notify`         | `message`, `type`, `duration`        | The server raises a toast      |
+| Event            | Payload                       | Fires when                    |
+| ---------------- | ----------------------------- | ----------------------------- |
+| `connect`        | —                             | The session is established    |
+| `disconnect`     | `reason`                      | The session drops             |
+| `error`          | `message`                     | Auth or transport fails       |
+| `stateChanged`   | `state`                       | Connection state transitions  |
+| `clientsChanged` | —                             | Any client's state changes    |
+| `tagsChanged`    | —                             | Tags are added/removed/edited |
+| `scriptsChanged` | —                             | The script list changes       |
+| `modeChanged`    | `mode`                        | The server enters SHOW/EDIT   |
+| `alertsChanged`  | `enabled`                     | Alerts are toggled            |
+| `notify`         | `message`, `type`, `duration` | The server raises a toast     |
 
 A throwing listener never blocks the others.
 
@@ -84,24 +84,33 @@ A throwing listener never blocks the others.
 The client keeps local caches updated by server pushes, so reads are
 synchronous and cheap.
 
-```ts
-client.getClient('stage-left');           // full ClientView, or undefined
-client.getAllClients();
-client.getClientStatus('stage-left');     // 'ONLINE' | 'DEGRADED' | 'OFFLINE' | 'IDLE'
-client.getClientLabel('stage-left');      // nickname → hostname → slug → UUID
-client.getClientStatusColour('stage-left'); // hex, for UI tiles
-client.getClientStatusRgb('stage-left');    // [r, g, b], for hardware surfaces
+Everything the server projects as a client appears in these caches and shares
+one slug namespace: real clients, monitoring targets (`monitor:<id>`), dummy
+clients (`dummy:<uuid>`) and FreeKiosk terminals (`kiosk:<uuid>`). They are
+addressed by slug regardless of kind, and all of them feed `getAllClients()`,
+which is what the group, tag and workspace aggregates read. `ClientView.Type`
+tells them apart, and is deliberately an open union — a server newer than this
+SDK may push a type it does not name.
 
-client.getGroupStatus('front-of-house');  // rolled-up status
+```ts
+client.getClient('stage-left'); // full ClientView, or undefined
+client.getAllClients(); // every kind below, in one list
+client.getClientsByType('freekiosk'); // just one kind
+client.getClientStatus('stage-left'); // 'ONLINE' | 'DEGRADED' | 'OFFLINE' | 'IDLE'
+client.getClientLabel('stage-left'); // nickname → hostname → slug → UUID
+client.getClientStatusColour('stage-left'); // hex, for UI tiles
+client.getClientStatusRgb('stage-left'); // [r, g, b], for hardware surfaces
+
+client.getGroupStatus('front-of-house'); // rolled-up status
 client.getTagStatus('projectors');
-client.getAllStatus();                    // whole workspace
+client.getAllStatus(); // whole workspace
 
 client.getGroups();
 client.getTags();
 client.getScripts();
-client.getMode();                         // 'SHOW' | 'EDIT'
+client.getMode(); // 'SHOW' | 'EDIT'
 client.getAlertsEnabled();
-client.getState();                        // 'disconnected' | 'connecting' | ...
+client.getState(); // 'disconnected' | 'connecting' | ...
 client.isConnected();
 ```
 
@@ -110,17 +119,17 @@ client.isConnected();
 Every command returns `Promise<CommandResult>` (`{ ok, detail }`) once the
 server acknowledges it.
 
-| Area        | Methods                                                                                  |
-| ----------- | ---------------------------------------------------------------------------------------- |
-| Wake-on-LAN | `wolAll`, `wolClient`, `wolGroup`, `wolTag`                                               |
-| Scripts     | `runScriptOnAll`, `runScriptOnClient`, `runScriptOnGroup`, `runScriptOnTag`               |
-| Events      | `triggerEventOnAll`, `triggerEventOnClient`, `triggerEventOnGroup`, `triggerEventOnTag`   |
-| Alerts      | `alertsOn`, `alertsOff`, `alertsToggle`                                                   |
-| Mode        | `enterShowMode`, `enterEditMode`, `toggleMode`                                            |
-| View        | `enterCompactView`, `enterExpandedView`, `toggleView`                                     |
-| Modals      | `openClientModal`, `closeAllModals`                                                       |
-| Show        | `saveShow`                                                                                |
-| System      | `shutdownServer`, `forceShutdownServer`                                                   |
+| Area        | Methods                                                                                 |
+| ----------- | --------------------------------------------------------------------------------------- |
+| Wake-on-LAN | `wolAll`, `wolClient`, `wolGroup`, `wolTag`                                             |
+| Scripts     | `runScriptOnAll`, `runScriptOnClient`, `runScriptOnGroup`, `runScriptOnTag`             |
+| Events      | `triggerEventOnAll`, `triggerEventOnClient`, `triggerEventOnGroup`, `triggerEventOnTag` |
+| Alerts      | `alertsOn`, `alertsOff`, `alertsToggle`                                                 |
+| Mode        | `enterShowMode`, `enterEditMode`, `toggleMode`                                          |
+| View        | `enterCompactView`, `enterExpandedView`, `toggleView`                                   |
+| Modals      | `openClientModal`, `closeAllModals`                                                     |
+| Show        | `saveShow`                                                                              |
+| System      | `shutdownServer`, `forceShutdownServer`                                                 |
 
 Targeted variants take the slug first: `runScriptOnGroup(groupSlug, scriptSlug)`.
 

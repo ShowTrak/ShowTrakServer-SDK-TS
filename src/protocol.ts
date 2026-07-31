@@ -26,14 +26,20 @@ export interface IntegratedAction {
 }
 
 /**
- * Public projection of a client. Monitors and dummies are surfaced through the
- * same shape (distinguished by `Type`) so integrations treat all three uniformly
- * — they appear in the client list, carry status + label, and are addressable by
- * slug. For monitors/dummies, `UUID` is a synthetic scoped id (`monitor:<id>` /
- * `dummy:<uuid>`) and telemetry fields are empty.
+ * Public projection of a client. Monitoring targets, dummy clients and FreeKiosk
+ * terminals are surfaced through the same shape (distinguished by `Type`) so
+ * integrations treat them all uniformly — they appear in the client list, carry
+ * status + label, and are addressable by slug. For those, `UUID` is a synthetic
+ * scoped id (`monitor:<id>`, `dummy:<uuid>`, `kiosk:<uuid>`) and the telemetry
+ * fields are empty.
+ *
+ * `Type` stays open on purpose. A server newer than this SDK may introduce an
+ * entity type the union does not name, and a closed union would make that a
+ * COMPILE error in every consumer rather than a value they can simply ignore.
+ * The named members still autocomplete.
  */
 export interface ClientView {
-  Type: 'client' | 'monitor' | 'dummy';
+  Type: 'client' | 'monitor' | 'dummy' | 'freekiosk' | (string & {});
   UUID: string;
   Slug: string | null;
   Nickname?: string | null;

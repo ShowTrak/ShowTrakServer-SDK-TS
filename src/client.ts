@@ -75,18 +75,80 @@ export function ClientLabel(client: ClientView): string {
   );
 }
 
+/**
+ * Client-shaped entities that arrive on their own pair of channels.
+ *
+ * Real clients are deliberately absent: they carry telemetry, are indexed by
+ * UUID as well as slug, and share their list event with the group list. Every
+ * OTHER entity the server projects into a ClientView — monitoring targets, dummy
+ * clients, FreeKiosk terminals — is a slug-keyed snapshot delivered as a
+ * full-list event plus a single-entity update event, and nothing else about them
+ * differs. So a new entity type is A ROW HERE, not a fourth copy of twenty
+ * near-identical lines.
+ *
+ * `ScopeIdIsBare` records an inconsistency in the server rather than a choice.
+ * A tag's membership list stores whatever id the scope picker wrote: a prefixed
+ * `monitor:<id>` for monitoring targets, but a BARE uuid for dummies and
+ * FreeKiosk terminals. The pushed ClientView always carries the prefixed form,
+ * so matching a scope entry means knowing which of the two to compare. Getting
+ * this wrong is invisible — the tag simply under-counts — which is exactly how
+ * it went unnoticed for dummies.
+ */
+const AUXILIARY_ENTITIES = [
+  {
+    Kind: 'monitor',
+    ListEvent: 'SetFullMonitoringTargetList',
+    UpdateEvent: 'MonitoringTargetUpdated',
+    Prefix: 'monitor:',
+    ScopeIdIsBare: false,
+  },
+  {
+    Kind: 'dummy',
+    ListEvent: 'SetFullDummyClientList',
+    UpdateEvent: 'DummyClientUpdated',
+    Prefix: 'dummy:',
+    ScopeIdIsBare: true,
+  },
+  {
+    Kind: 'freekiosk',
+    ListEvent: 'SetFullFreeKioskTerminalList',
+    UpdateEvent: 'FreeKioskTerminalUpdated',
+    Prefix: 'kiosk:',
+    ScopeIdIsBare: true,
+  },
+] as const;
+
+/** The entity kinds above, for callers that want to filter by one. */
+export type AuxiliaryEntityKind = (typeof AUXILIARY_ENTITIES)[number]['Kind'];
+
+/**
+ * Every id a tag scope might have stored for this entity.
+ *
+ * Always includes the UUID as pushed. For an entity whose scope id is bare, the
+ * de-prefixed form is added too — and ONLY for those, so a monitor's `monitor:8`
+ * can never also match a scope entry that happens to read `8`.
+ */
+function ScopeIdCandidates(uuid: string): string[] {
+  for (const Entity of AUXILIARY_ENTITIES) {
+    if (!Entity.ScopeIdIsBare || !uuid.startsWith(Entity.Prefix)) continue;
+    return [uuid, uuid.slice(Entity.Prefix.length)];
+  }
+  return [uuid];
+}
+
 export class ShowTrakControlClient {
   private socket: Socket | null = null;
   private state: ConnectionState = 'disconnected';
 
-  // Live caches, keyed by slug for O(1) feedback lookups. Monitors and dummies
-  // are client-shaped and share the slug namespace with real clients, but are
-  // kept in their own maps so a full-list replacement for one entity type never
-  // disturbs the others. getAllClients()/getClient() read across all three.
+  // Live caches, keyed by slug for O(1) feedback lookups. The auxiliary entities
+  // are client-shaped and share the slug namespace with real clients, but each
+  // kind is kept in its own map so a full-list replacement for one never
+  // disturbs the others. getAllClients()/getClient() read across all of them.
   private clientsBySlug = new Map<string, ClientView>();
   private clientsByUuid = new Map<string, ClientView>();
-  private monitorsBySlug = new Map<string, ClientView>();
-  private dummiesBySlug = new Map<string, ClientView>();
+  private auxiliaryBySlug = new Map<AuxiliaryEntityKind, Map<string, ClientView>>(
+    AUXILIARY_ENTITIES.map((Entity) => [Entity.Kind, new Map<string, ClientView>()])
+  );
   private groupsBySlug = new Map<string, GroupView>();
   private tagsBySlug = new Map<string, TagView>();
   private scriptsById = new Map<string, ScriptView>();
@@ -134,8 +196,7 @@ export class ShowTrakControlClient {
     }
     this.clientsBySlug.clear();
     this.clientsByUuid.clear();
-    this.monitorsBySlug.clear();
-    this.dummiesBySlug.clear();
+    for (const Store of this.auxiliaryBySlug.values()) Store.clear();
     this.groupsBySlug.clear();
     this.tagsBySlug.clear();
     this.scriptsById.clear();
@@ -175,22 +236,37 @@ export class ShowTrakControlClient {
 
   // --- Feedback getters (synchronous, read from cache) -------------------
 
-  // Look up an entity by slug across clients, monitors and dummies (one shared,
+  // Look up an entity by slug across every client-like kind (one shared,
   // collision-free namespace). Real clients win if a slug ever appears twice.
   getClient(slug: string): ClientView | undefined {
-    return (
-      this.clientsBySlug.get(slug) ?? this.monitorsBySlug.get(slug) ?? this.dummiesBySlug.get(slug)
-    );
+    const Client = this.clientsBySlug.get(slug);
+    if (Client) return Client;
+    for (const Store of this.auxiliaryBySlug.values()) {
+      const Found = Store.get(slug);
+      if (Found) return Found;
+    }
+    return undefined;
   }
 
-  // Every controllable entity: real clients + monitoring targets + dummies. Feeds
-  // the summary counts and the per-entity status/label variables.
+  // Every controllable entity: real clients plus every auxiliary kind. Feeds the
+  // summary counts and the per-entity status/label variables, so an entity type
+  // missing from here is invisible to every aggregate the SDK reports.
   getAllClients(): ClientView[] {
-    return [
-      ...this.clientsBySlug.values(),
-      ...this.monitorsBySlug.values(),
-      ...this.dummiesBySlug.values(),
-    ];
+    const All: ClientView[] = [...this.clientsBySlug.values()];
+    for (const Store of this.auxiliaryBySlug.values()) All.push(...Store.values());
+    return All;
+  }
+
+  /**
+   * Just one kind of entity — 'client' for real clients, or any auxiliary kind.
+   *
+   * Reads the pushed `Type` rather than the internal store, so a kind this SDK
+   * build predates still answers correctly once it is listed in
+   * AUXILIARY_ENTITIES; and a caller can ask for a type by name without the SDK
+   * needing a bespoke getter per entity.
+   */
+  getClientsByType(type: string): ClientView[] {
+    return this.getAllClients().filter((Entity) => String(Entity.Type) === type);
   }
 
   getClientStatus(slug: string): ClientStatus | undefined {
@@ -243,7 +319,10 @@ export class ShowTrakControlClient {
   ): boolean {
     if (!scope || scope.Workspace) return true;
     if (!client || !client.UUID) return false;
-    if (scope.Clients.includes(client.UUID)) return true;
+    // Not just client.UUID: a dummy or a FreeKiosk terminal is pushed with a
+    // prefixed uuid but recorded in a tag scope bare, so comparing only the
+    // pushed form silently drops it from the tag. See AUXILIARY_ENTITIES.
+    if (ScopeIdCandidates(client.UUID).some((Id) => scope.Clients.includes(Id))) return true;
     if (client.GroupID != null && scope.Groups.includes(Number(client.GroupID))) return true;
     for (const raw of Array.isArray(scope.Tags) ? scope.Tags : []) {
       const tagID = Number(raw);
@@ -403,36 +482,26 @@ export class ShowTrakControlClient {
       this.emit('clientsChanged');
     });
 
-    // Monitoring targets — client-shaped, kept in their own map so a full-list
-    // replacement here never touches real clients or dummies.
-    socket.on('SetFullMonitoringTargetList', (monitors: ClientView[]) => {
-      this.monitorsBySlug.clear();
-      for (const monitor of monitors || []) {
-        if (monitor.Slug) this.monitorsBySlug.set(monitor.Slug, monitor);
-      }
-      this.emit('clientsChanged');
-    });
+    // Every auxiliary entity kind, wired from one table. Each keeps its own map,
+    // so a full-list replacement for one kind never touches another — and adding
+    // a kind means adding a row to AUXILIARY_ENTITIES, with no handler to forget.
+    for (const Entity of AUXILIARY_ENTITIES) {
+      const Store = this.auxiliaryBySlug.get(Entity.Kind)!;
 
-    socket.on('MonitoringTargetUpdated', (monitor: ClientView) => {
-      if (!monitor || !monitor.Slug) return;
-      this.monitorsBySlug.set(monitor.Slug, monitor);
-      this.emit('clientsChanged');
-    });
+      socket.on(Entity.ListEvent, (entities: ClientView[]) => {
+        Store.clear();
+        for (const Received of entities || []) {
+          if (Received && Received.Slug) Store.set(Received.Slug, Received);
+        }
+        this.emit('clientsChanged');
+      });
 
-    // Dummy clients — same treatment as monitoring targets.
-    socket.on('SetFullDummyClientList', (dummies: ClientView[]) => {
-      this.dummiesBySlug.clear();
-      for (const dummy of dummies || []) {
-        if (dummy.Slug) this.dummiesBySlug.set(dummy.Slug, dummy);
-      }
-      this.emit('clientsChanged');
-    });
-
-    socket.on('DummyClientUpdated', (dummy: ClientView) => {
-      if (!dummy || !dummy.Slug) return;
-      this.dummiesBySlug.set(dummy.Slug, dummy);
-      this.emit('clientsChanged');
-    });
+      socket.on(Entity.UpdateEvent, (entity: ClientView) => {
+        if (!entity || !entity.Slug) return;
+        Store.set(entity.Slug, entity);
+        this.emit('clientsChanged');
+      });
+    }
 
     socket.on('SetTagList', (tags: TagView[]) => {
       this.tagsBySlug.clear();
