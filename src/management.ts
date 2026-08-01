@@ -16,8 +16,35 @@
 // Everything below is a typed wrapper over one `rpc` channel name. The channel
 // strings live here and nowhere else, so a consumer never types one.
 
-/** The `[Err, Data]` tuple every ShowTrak IPC handler returns. */
+/**
+ * The `[Err, Data]` tuple MOST ShowTrak IPC handlers return.
+ *
+ * Not all of them: the history readers return their array directly, and
+ * `GetClient` returns the client or null. The typed wrappers below say which is
+ * which, because guessing wrong is silent — destructuring an array as a tuple
+ * hands you the first sample as an "error" and the second as the data.
+ */
 export type ResultTuple<T = unknown> = [string | null, T | null];
+
+/**
+ * One point on a client's status timeline.
+ *
+ * The desktop draws these as the coloured blocks above the client info panel;
+ * `online`/`degraded` map onto the same status colours a tile uses.
+ */
+export interface HistorySample {
+  ts: number;
+  online: boolean;
+  degraded: boolean;
+  latencyMs: number | null;
+}
+
+/** A named series — one running application, USB device, or display. */
+export interface NamedHistorySeries {
+  Key: string;
+  Name: string;
+  samples: HistorySample[];
+}
 
 /** Why the server refused an rpc call. */
 export type RpcErrorCode =

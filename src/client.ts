@@ -18,6 +18,8 @@ import {
   RPC_CHANNELS,
   ToRpcResult,
   type Capabilities,
+  type HistorySample,
+  type NamedHistorySeries,
   type ResultTuple,
   type RpcChannel,
   type RpcResult,
@@ -25,6 +27,7 @@ import {
 import { Pair, type PairOptions, type PairResult } from './pairing.js';
 import type {
   AppMode,
+  ClientDetail,
   ClientView,
   CommandArgs,
   CommandName,
@@ -621,12 +624,30 @@ export class ShowTrakControlClient {
 
   // Reads. Available to any session that may connect — no mode or permission
   // gate — so these are the safe things for a UI to call on first paint.
-  getClientDetail = (uuid: string) => this.rpc<ResultTuple>(RPC_CHANNELS.GetClient, [uuid]);
-  getClientHistory = (uuid: string) => this.rpc<ResultTuple>(RPC_CHANNELS.GetClientHistory, [uuid]);
+  //
+  // The return shapes are NOT uniform, and the types below say so rather than
+  // pretending otherwise: GetClient answers the client or null, while the
+  // history readers answer their array directly. Typing a bare array as a
+  // [Err, Data] tuple fails silently — the first sample becomes the "error".
+
+  /** The full server-side client record, with every field the desktop shows. */
+  getClientDetail = (uuid: string) => this.rpc<ClientDetail | null>(RPC_CHANNELS.GetClient, [uuid]);
+
+  /** Online/degraded timeline, oldest first. The desktop's status blocks. */
+  getClientHistory = (uuid: string) =>
+    this.rpc<HistorySample[]>(RPC_CHANNELS.GetClientHistory, [uuid]);
+
+  /** One series per USB device seen, whether or not it is connected now. */
   getClientUsbHistory = (uuid: string) =>
-    this.rpc<ResultTuple>(RPC_CHANNELS.GetClientUSBHistory, [uuid]);
+    this.rpc<NamedHistorySeries[]>(RPC_CHANNELS.GetClientUSBHistory, [uuid]);
+
+  /** One series per watched application. */
   getClientApplicationHistory = (uuid: string) =>
-    this.rpc<ResultTuple>(RPC_CHANNELS.GetClientApplicationHistory, [uuid]);
+    this.rpc<NamedHistorySeries[]>(RPC_CHANNELS.GetClientApplicationHistory, [uuid]);
+
+  /** One series per display. */
+  getClientDisplayHistory = (uuid: string) =>
+    this.rpc<NamedHistorySeries[]>(RPC_CHANNELS.GetClientDisplayHistory, [uuid]);
   getAllMonitoringTargets = () => this.rpc<ResultTuple>(RPC_CHANNELS.GetAllMonitoringTargets, []);
   getAllAlertRules = () => this.rpc<ResultTuple>(RPC_CHANNELS.GetAllAlertRules, []);
 

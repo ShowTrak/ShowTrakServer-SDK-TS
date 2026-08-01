@@ -96,6 +96,29 @@ export interface Vitals {
   Uptime: { Formatted: string };
 }
 
+/**
+ * The full server-side client record, as `GetClient` answers it.
+ *
+ * Deliberately looser than ClientView: this is the desktop's own object, and it
+ * carries fields (USB inventory, displays, network interfaces, running
+ * applications) whose shapes are the server's business rather than this SDK's.
+ * Naming the ones a detail view actually reads, and leaving the rest indexable,
+ * is the honest middle — mirroring every internal column here would be a second
+ * schema to keep in step for no gain.
+ */
+export interface ClientDetail extends ClientView {
+  MacAddress?: string | null;
+  MacAddresses?: unknown[];
+  LastSeen?: number | null;
+  USBDeviceList?: unknown[];
+  CriticalUSBDevices?: unknown[];
+  MissingCriticalUSBDevices?: unknown[];
+  DisplayList?: unknown[];
+  NetworkInterfaces?: unknown[];
+  RunningApplications?: unknown;
+  [key: string]: unknown;
+}
+
 /** Public projection of a group. */
 export interface GroupView {
   GroupID: number;
