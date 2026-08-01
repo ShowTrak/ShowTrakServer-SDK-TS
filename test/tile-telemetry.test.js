@@ -107,3 +107,96 @@ test('an updated client replaces its telemetry rather than merging it', async (t
 
   assert.equal(client.getClient('foh').Vitals, undefined);
 });
+
+// --- Tag membership ----------------------------------------------------------
+//
+// Exposed because a consumer cannot work it out without reimplementing the scope
+// walk, and a second implementation would disagree invisibly: a tag filter that
+// quietly omits a machine looks like a tag with fewer members, not like a bug.
+
+test('a tag covers the clients its scope names, directly and by group', async (t) => {
+  const { server, client } = await startConnected(t);
+  server.push(
+    'SetFullClientList',
+    [
+      makeClient({ UUID: 'u-a', Slug: 'a', GroupID: 1 }),
+      makeClient({ UUID: 'u-b', Slug: 'b', GroupID: 2 }),
+      makeClient({ UUID: 'u-c', Slug: 'c', GroupID: 2 }),
+    ],
+    []
+  );
+  server.push('SetTagList', [
+    {
+      TagID: 1,
+      Slug: 'projectors',
+      Scope: { Workspace: false, Groups: [2], Clients: ['u-a'], Tags: [] },
+    },
+  ]);
+  await waitFor(() => client.getTags().length === 1, { label: 'tags cached' });
+
+  const Members = client.getTagMembers('projectors').map((Member) => Member.Slug);
+  assert.deepEqual([...Members].sort(), ['a', 'b', 'c']);
+  assert.equal(client.isClientInTag('projectors', 'a'), true);
+});
+
+test('a workspace tag covers everything', async (t) => {
+  const { server, client } = await startConnected(t);
+  server.push(
+    'SetFullClientList',
+    [makeClient({ Slug: 'a' }), makeClient({ UUID: 'u2', Slug: 'b' })],
+    []
+  );
+  server.push('SetTagList', [
+    { TagID: 1, Slug: 'all', Scope: { Workspace: true, Groups: [], Clients: [], Tags: [] } },
+  ]);
+  await waitFor(() => client.getTags().length === 1, { label: 'tags cached' });
+
+  assert.equal(client.getTagMembers('all').length, 2);
+});
+
+test('an unknown tag yields no members rather than throwing', async (t) => {
+  // A filter can outlive the tag it names — a tag deleted at the desk while the
+  // phone is showing it. Degrading to "nothing matches" beats crashing a render.
+  const { client } = await startConnected(t);
+  assert.deepEqual(client.getTagMembers('deleted'), []);
+  assert.equal(client.isClientInTag('deleted', 'a'), false);
+});
+
+test('a tag absorbing another covers the other tag members too', async (t) => {
+  const { server, client } = await startConnected(t);
+  server.push(
+    'SetFullClientList',
+    [
+      makeClient({ UUID: 'u-a', Slug: 'a', GroupID: 1 }),
+      makeClient({ UUID: 'u-b', Slug: 'b', GroupID: 9 }),
+    ],
+    []
+  );
+  server.push('SetTagList', [
+    { TagID: 1, Slug: 'inner', Scope: { Workspace: false, Groups: [1], Clients: [], Tags: [] } },
+    { TagID: 2, Slug: 'outer', Scope: { Workspace: false, Groups: [], Clients: [], Tags: [1] } },
+  ]);
+  await waitFor(() => client.getTags().length === 2, { label: 'tags cached' });
+
+  assert.deepEqual(
+    client.getTagMembers('outer').map((Member) => Member.Slug),
+    ['a']
+  );
+});
+
+test('two tags absorbing each other terminate rather than hanging the render', async (t) => {
+  // An operator can author this in the scope picker. Without the cycle guard it
+  // is an infinite recursion inside a synchronous read called from render.
+  const { server, client } = await startConnected(t);
+  server.push('SetFullClientList', [makeClient({ UUID: 'u-a', Slug: 'a', GroupID: 1 })], []);
+  server.push('SetTagList', [
+    { TagID: 1, Slug: 'one', Scope: { Workspace: false, Groups: [], Clients: [], Tags: [2] } },
+    { TagID: 2, Slug: 'two', Scope: { Workspace: false, Groups: [1], Clients: [], Tags: [1] } },
+  ]);
+  await waitFor(() => client.getTags().length === 2, { label: 'tags cached' });
+
+  assert.deepEqual(
+    client.getTagMembers('one').map((Member) => Member.Slug),
+    ['a']
+  );
+});

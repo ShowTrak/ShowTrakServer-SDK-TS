@@ -391,6 +391,34 @@ export class ShowTrakControlClient {
     return this.aggregateStatus(members);
   }
 
+  /**
+   * Every entity a tag currently covers.
+   *
+   * Public because membership is not something a consumer can work out for
+   * itself without reimplementing the scope walk — including the nested-tag
+   * recursion, the cycle guard, and the prefixed-vs-bare id quirk that silently
+   * under-counts dummies and FreeKiosk terminals. A second implementation of
+   * that would disagree with this one eventually, and the disagreement would be
+   * invisible: a tag filter that quietly omits a machine looks like a tag with
+   * fewer members, not like a bug.
+   *
+   * Returns an empty list for an unknown slug, so a stale filter degrades to
+   * "nothing matches" rather than throwing at a caller mid-render.
+   */
+  getTagMembers(slug: string): ClientView[] {
+    const tag = this.tagsBySlug.get(slug);
+    if (!tag) return [];
+    return this.getAllClients().filter((c) => this.clientInTagScope(tag.Scope, c));
+  }
+
+  /** Whether one entity falls under a tag. Same rules as getTagMembers. */
+  isClientInTag(tagSlug: string, clientSlug: string): boolean {
+    const tag = this.tagsBySlug.get(tagSlug);
+    const client = this.getClient(clientSlug);
+    if (!tag || !client) return false;
+    return this.clientInTagScope(tag.Scope, client);
+  }
+
   /** Aggregate status of a tag's members (degraded > online > idle > offline). */
   getTagStatus(slug: string): ClientStatus | undefined {
     const tag = this.tagsBySlug.get(slug);
