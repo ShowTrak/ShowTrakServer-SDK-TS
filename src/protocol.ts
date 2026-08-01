@@ -53,6 +53,47 @@ export interface ClientView {
   Integrated?: boolean;
   Identifying?: boolean;
   IntegratedActions?: IntegratedAction[];
+
+  // --- Tile telemetry ------------------------------------------------------
+  // Everything below has always been on the wire; it was simply not declared,
+  // because this file mirrors only what integrations were known to consume. A
+  // UI that reproduces the ShowTrak client tile needs all four: the address to
+  // identify a machine, the vitals to fill the CPU/RAM bars, LastSeen to count
+  // how long something has been down, and the warnings to say WHY a client is
+  // degraded rather than just that it is.
+  //
+  // All optional: a monitor, dummy or FreeKiosk terminal carries none of them,
+  // and neither does an older server.
+
+  /** Last known IP address. Absent for entities with no host of their own. */
+  IP?: string | null;
+
+  /** Epoch ms of the last heartbeat. The offline counter is `now - LastSeen`. */
+  LastSeen?: number | null;
+
+  /**
+   * Live CPU / RAM / uptime, present only while a client is online.
+   *
+   * `Ram.UsagePercentage` is a STRING — the client sends it through
+   * `Number#toFixed(2)`. Reading it as a number without coercing is the trap
+   * here, and it fails silently by rendering an empty bar rather than throwing.
+   */
+  Vitals?: Vitals | null;
+
+  /** Why a client is degraded, one message per problem. Empty when healthy. */
+  DegradedWarnings?: string[];
+}
+
+/** Live telemetry a client reports on every heartbeat. */
+export interface Vitals {
+  CPU: { UsagePercentage: number };
+  Ram: {
+    Total: number;
+    Used: number;
+    /** Transmitted as a string via `toFixed(2)` — coerce before comparing. */
+    UsagePercentage: string;
+  };
+  Uptime: { Formatted: string };
 }
 
 /** Public projection of a group. */
