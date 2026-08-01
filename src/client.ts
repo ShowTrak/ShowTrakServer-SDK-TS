@@ -14,6 +14,15 @@ import {
   StatusRgb,
   type ClientStatus,
 } from './constants.js';
+import {
+  RPC_CHANNELS,
+  ToRpcResult,
+  type Capabilities,
+  type ResultTuple,
+  type RpcChannel,
+  type RpcResult,
+} from './management.js';
+import { Pair, type PairOptions, type PairResult } from './pairing.js';
 import type {
   AppMode,
   ClientView,
@@ -26,23 +35,52 @@ import type {
   TagView,
 } from './protocol.js';
 
-export interface ConnectOptions {
+interface ConnectOptionsBase {
   host: string;
   /** Defaults to DEFAULT_SERVER_PORT (3000). */
   port?: number;
-  /** Required — the server refuses connections without a matching API key. */
-  apiKey: string;
   /** Reconnect automatically (default true). */
   reconnect?: boolean;
 }
 
+/**
+ * Exactly one credential, never both.
+ *
+ * They are not interchangeable and the server treats them differently: an API
+ * key identifies an INTEGRATION and may only send commands, while a device token
+ * identifies a PAIRED DEVICE and additionally reaches the management bridge. A
+ * union rather than two optional fields, so "I have neither" and "I have both"
+ * are compile errors instead of a handshake the server has to adjudicate.
+ */
+export type ConnectOptions =
+  | (ConnectOptionsBase & { apiKey: string; deviceToken?: never })
+  | (ConnectOptionsBase & { deviceToken: string; apiKey?: never });
+
 export type ConnectionState = 'disconnected' | 'connecting' | 'connected' | 'error';
+
+/** Per-category permissions as probed from the server. See refreshCapabilities. */
+interface SurfacePermissionSnapshot {
+  clientManagement: boolean;
+  groupManagement: boolean;
+  monitoringManagement: boolean;
+  alertManagement: boolean;
+  identify: boolean;
+  scripts: boolean;
+  wol: boolean;
+}
 
 type Listener<T extends unknown[]> = (...args: T) => void;
 
 interface Events {
   connect: [];
   disconnect: [reason: string];
+  /**
+   * This device's pairing was revoked at the desk. The stored token is now
+   * worthless — drop it and send the operator back to pairing rather than
+   * reconnecting, which will only be refused again.
+   */
+  revoked: [];
+  capabilitiesChanged: [];
   error: [message: string];
   stateChanged: [state: ConnectionState];
   clientsChanged: [];
@@ -154,6 +192,11 @@ export class ShowTrakControlClient {
   private scriptsById = new Map<string, ScriptView>();
   private mode: AppMode = 'SHOW';
   private alertsEnabled = true;
+  // Whether this session authenticated as a paired device. Only a device may
+  // reach the management bridge, so an API-key session reports no management
+  // capabilities rather than offering controls the server will refuse.
+  private isDevice = false;
+  private permissions: SurfacePermissionSnapshot | null = null;
 
   private listeners: { [K in keyof Events]: Set<Listener<Events[K]>> } = {
     connect: new Set(),
@@ -166,6 +209,8 @@ export class ShowTrakControlClient {
     alertsChanged: new Set(),
     scriptsChanged: new Set(),
     notify: new Set(),
+    revoked: new Set(),
+    capabilitiesChanged: new Set(),
   };
 
   // --- Lifecycle ---------------------------------------------------------
@@ -174,11 +219,12 @@ export class ShowTrakControlClient {
     this.disconnect();
     const port = options.port ?? DEFAULT_SERVER_PORT;
     const url = `http://${options.host}:${port}${SDK_NAMESPACE}`;
+    this.isDevice = !!options.deviceToken;
     this.setState('connecting');
     this.socket = io(url, {
       transports: ['websocket', 'polling'],
       reconnection: options.reconnect !== false,
-      auth: { apiKey: options.apiKey },
+      auth: options.deviceToken ? { deviceToken: options.deviceToken } : { apiKey: options.apiKey },
       forceNew: true,
     });
     this.wire(this.socket);
@@ -449,6 +495,142 @@ export class ShowTrakControlClient {
   shutdownServer = (): Promise<CommandResult> => this.command('system.shutdown', {});
   forceShutdownServer = (): Promise<CommandResult> => this.command('system.shutdownForce', {});
 
+  // --- Pairing -----------------------------------------------------------
+
+  /**
+   * Exchange a PIN (or a scanned code, or nothing when the workspace has no PIN)
+   * for a device token. Static because pairing is not a session: it opens its
+   * own short-lived socket and closes it again, and the caller then `connect()`s
+   * with the token like any other device would.
+   */
+  static pair(options: PairOptions): Promise<PairResult> {
+    return Pair(options);
+  }
+
+  // --- Management (rpc) ---------------------------------------------------
+
+  /**
+   * Call one of the server's shared IPC handlers.
+   *
+   * Available to PAIRED DEVICES ONLY — an API-key session is refused by the
+   * server, and short-circuited here so an integration gets a `forbidden`
+   * without a pointless round trip.
+   */
+  rpc<T = unknown>(channel: RpcChannel, args: unknown[] = []): Promise<RpcResult<T>> {
+    return new Promise((resolve) => {
+      if (!this.socket || this.state !== 'connected') {
+        resolve({ ok: false, code: 'not_connected' });
+        return;
+      }
+      if (!this.isDevice) {
+        resolve({ ok: false, code: 'forbidden' });
+        return;
+      }
+      this.socket.emit('rpc', channel, args, (response: unknown) => {
+        resolve(ToRpcResult<T>(response));
+      });
+    });
+  }
+
+  /**
+   * What this session may mutate right now.
+   *
+   * Cached from the last read and refreshed on mode changes, so a UI can call it
+   * per render without a round trip. It is a UI affordance only — the server
+   * re-authorises every call regardless of what this reports.
+   */
+  getCapabilities(): Capabilities {
+    const Edit = this.mode === 'EDIT';
+    const Allowed = this.isDevice;
+    const P = this.permissions;
+    return {
+      editMode: Edit,
+      clientManagement: Allowed && Edit && (P?.clientManagement ?? true),
+      groupManagement: Allowed && Edit && (P?.groupManagement ?? true),
+      monitoringManagement: Allowed && Edit && (P?.monitoringManagement ?? true),
+      alertManagement: Allowed && Edit && (P?.alertManagement ?? true),
+      identify: Allowed && (P?.identify ?? true),
+      scripts: P?.scripts ?? true,
+      wol: P?.wol ?? true,
+    };
+  }
+
+  /**
+   * Probe what this session may actually do, by asking the server.
+   *
+   * The permission settings themselves are unreadable from a remote surface (they
+   * live behind settings channels, which are deliberately unreachable), so the
+   * only honest way to know is to try. Identify is probed with a slug that cannot
+   * exist: an allowed call comes back as a handler error about the missing
+   * client, a forbidden one never reaches the handler at all — which is exactly
+   * the distinction being probed for.
+   */
+  async refreshCapabilities(): Promise<Capabilities> {
+    if (!this.isDevice || this.state !== 'connected') {
+      this.permissions = null;
+      return this.getCapabilities();
+    }
+    const Probe = async (channel: RpcChannel, args: unknown[]): Promise<boolean> => {
+      const Result = await this.rpc(channel, args);
+      // Only an authorisation refusal means "not permitted". A handler that ran
+      // and failed (bad id, missing client) proves the permission IS granted.
+      if (Result.ok) return true;
+      return Result.code !== 'forbidden' && Result.code !== 'edit_mode_required';
+    };
+    const NoSuchSlug = '__showtrak_capability_probe__';
+    this.permissions = {
+      clientManagement: await Probe(RPC_CHANNELS.UpdateClient, [NoSuchSlug, {}]),
+      groupManagement: await Probe(RPC_CHANNELS.RenameGroup, [-1, '']),
+      monitoringManagement: await Probe(RPC_CHANNELS.RunMonitoringCheckNow, [-1]),
+      alertManagement: await Probe(RPC_CHANNELS.SetAlertRuleEnabled, [-1, false]),
+      identify: await Probe(RPC_CHANNELS.IdentifyClient, [NoSuchSlug]),
+      scripts: true,
+      wol: true,
+    };
+    this.emit('capabilitiesChanged');
+    return this.getCapabilities();
+  }
+
+  // Reads. Available to any session that may connect — no mode or permission
+  // gate — so these are the safe things for a UI to call on first paint.
+  getClientDetail = (uuid: string) => this.rpc<ResultTuple>(RPC_CHANNELS.GetClient, [uuid]);
+  getClientHistory = (uuid: string) => this.rpc<ResultTuple>(RPC_CHANNELS.GetClientHistory, [uuid]);
+  getClientUsbHistory = (uuid: string) =>
+    this.rpc<ResultTuple>(RPC_CHANNELS.GetClientUSBHistory, [uuid]);
+  getClientApplicationHistory = (uuid: string) =>
+    this.rpc<ResultTuple>(RPC_CHANNELS.GetClientApplicationHistory, [uuid]);
+  getAllMonitoringTargets = () => this.rpc<ResultTuple>(RPC_CHANNELS.GetAllMonitoringTargets, []);
+  getAllAlertRules = () => this.rpc<ResultTuple>(RPC_CHANNELS.GetAllAlertRules, []);
+
+  // Identify. Mutates nothing and is deliberately allowed in SHOW mode — it is
+  // the reason to have a phone in your hand at a rack in the first place.
+  identify = (slug: string): Promise<CommandResult> => this.command('identify.client', { slug });
+  stopIdentify = (slug: string): Promise<CommandResult> => this.command('identify.stop', { slug });
+
+  // Client management.
+  updateClient = (uuid: string, changes: Record<string, unknown>) =>
+    this.rpc<ResultTuple>(RPC_CHANNELS.UpdateClient, [uuid, changes]);
+  unadoptClient = (uuid: string) => this.rpc<ResultTuple>(RPC_CHANNELS.UnadoptClient, [uuid]);
+  adoptDevice = (uuid: string) => this.rpc<ResultTuple>(RPC_CHANNELS.AdoptDevice, [uuid]);
+
+  // Group management.
+  createGroup = (title: string) => this.rpc<ResultTuple>(RPC_CHANNELS.CreateGroup, [title]);
+  renameGroup = (groupId: number, title: string) =>
+    this.rpc<ResultTuple>(RPC_CHANNELS.RenameGroup, [groupId, title]);
+  deleteGroup = (groupId: number) => this.rpc<ResultTuple>(RPC_CHANNELS.DeleteGroup, [groupId]);
+
+  // Monitoring management.
+  runMonitoringCheckNow = (targetId: number) =>
+    this.rpc<ResultTuple>(RPC_CHANNELS.RunMonitoringCheckNow, [targetId]);
+  deleteMonitoringTarget = (targetId: number) =>
+    this.rpc<ResultTuple>(RPC_CHANNELS.DeleteMonitoringTarget, [targetId]);
+
+  // Alert rules.
+  setAlertRuleEnabled = (ruleId: number, enabled: boolean) =>
+    this.rpc<ResultTuple>(RPC_CHANNELS.SetAlertRuleEnabled, [ruleId, enabled]);
+  deleteAlertRule = (ruleId: number) =>
+    this.rpc<ResultTuple>(RPC_CHANNELS.DeleteAlertRule, [ruleId]);
+
   // --- Internal: socket wiring + cache maintenance -----------------------
 
   private wire(socket: Socket): void {
@@ -522,6 +704,16 @@ export class ShowTrakControlClient {
     socket.on('ModeUpdated', (mode: AppMode) => {
       this.mode = mode === 'EDIT' ? 'EDIT' : 'SHOW';
       this.emit('modeChanged', this.mode);
+      // Mode is half of every management capability, so a UI driven by
+      // getCapabilities() has to re-read when it flips.
+      this.emit('capabilitiesChanged');
+    });
+
+    // The device's pairing was revoked at the desk. Reconnecting will only be
+    // refused, so surface it as its own event rather than letting the app spin
+    // in a reconnect loop against a dead credential.
+    socket.on('revoked', () => {
+      this.emit('revoked');
     });
 
     socket.on('AlertActionsUpdated', (enabled: boolean) => {

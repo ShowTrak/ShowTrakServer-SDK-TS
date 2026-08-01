@@ -54,6 +54,10 @@ const COMMANDS = [
   ['enterExpandedView', [], 'view.set', { compact: false }],
   ['toggleView', [], 'view.toggle', {}],
 
+  // Identify — the one command safe in SHOW mode, because it mutates nothing.
+  ['identify', ['foh'], 'identify.client', { slug: 'foh' }],
+  ['stopIdentify', ['foh'], 'identify.stop', { slug: 'foh' }],
+
   // Modals
   ['openClientModal', ['foh'], 'modal.openClient', { slug: 'foh' }],
   ['closeAllModals', [], 'modal.closeAll', {}],

@@ -152,6 +152,11 @@ export type CommandName =
   // Expanded / Compact view
   | 'view.set'
   | 'view.toggle'
+  // Identify — flashes an overlay on the client's own screen. Mutates nothing
+  // and is deliberately available in SHOW mode: it exists for the operator
+  // standing at a rack working out which machine is which.
+  | 'identify.client'
+  | 'identify.stop'
   // Modals (desktop app only — the web UI ignores these)
   | 'modal.openClient'
   | 'modal.closeAll'
@@ -181,6 +186,8 @@ export interface CommandArgs {
   'mode.toggle': Record<string, never>;
   'view.set': { compact: boolean };
   'view.toggle': Record<string, never>;
+  'identify.client': { slug: string };
+  'identify.stop': { slug: string };
   'modal.openClient': { slug: string };
   'modal.closeAll': Record<string, never>;
   'show.save': Record<string, never>;

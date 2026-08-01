@@ -6,6 +6,18 @@
 
 export * from './constants.js';
 export * from './protocol.js';
+export * from './discovery.js';
+export * from './management.js';
+export {
+  Pair,
+  ClassifyPairError,
+  ParseRetryAfterMs,
+  type PairOptions,
+  type PairResult,
+  type PairSuccess,
+  type PairFailure,
+  type PairErrorCode,
+} from './pairing.js';
 export {
   ShowTrakControlClient,
   DeriveClientStatus,

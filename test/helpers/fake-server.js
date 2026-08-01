@@ -29,24 +29,73 @@ export async function startFakeServer(options = {}) {
   const io = new Server(http, { cors: { origin: '*' } });
   const namespace = io.of(SDK_NAMESPACE);
 
+  const pin = options.pin ?? null;
+  const deviceToken = options.deviceToken ?? 'device-token';
+  const pairingCode = options.pairingCode ?? null;
+
   /** Every command the SDK sent, in order: {name, args}. */
   const commands = [];
+  /** Every rpc the SDK sent, in order: {channel, args}. */
+  const rpcCalls = [];
+  /** Every pairing attempt's auth payload, in order. */
+  const pairAttempts = [];
   /** Sockets currently connected to the namespace. */
   const sockets = new Set();
 
+  // Mirrors the real namespace's fixed precedence: device token, then an
+  // explicit pairing request, then the API key. A socket presenting more than
+  // one must not be able to shop for the most permissive.
   namespace.use((socket, next) => {
-    const presented = String((socket.handshake.auth && socket.handshake.auth.apiKey) || '');
+    const auth = socket.handshake.auth || {};
+
+    const presentedToken = String(auth.deviceToken || '');
+    if (presentedToken) {
+      if (presentedToken !== deviceToken) return next(new Error('Device revoked'));
+      socket.data.authMode = 'device';
+      return next();
+    }
+
+    if (auth.pair === true) {
+      pairAttempts.push(auth);
+      if (options.pairingDisabled) return next(new Error('Remote pairing is disabled'));
+      if (pairingCode && auth.pairingCode) {
+        if (auth.pairingCode !== pairingCode) {
+          return next(new Error('Invalid or expired pairing code'));
+        }
+      } else if (pin && String(auth.pin || '') !== pin) {
+        return next(new Error('Unauthorized'));
+      }
+      socket.data.authMode = 'device';
+      socket.data.mintToken = true;
+      return next();
+    }
+
+    const presented = String(auth.apiKey || '');
     if (presented !== apiKey) return next(new Error('Unauthorized'));
+    socket.data.authMode = 'apikey';
     return next();
   });
 
   namespace.on('connection', (socket) => {
     sockets.add(socket);
     socket.on('disconnect', () => sockets.delete(socket));
+
+    if (socket.data.mintToken) {
+      socket.emit('paired', { deviceId: 'device-1', deviceToken });
+    }
+
     socket.on(COMMAND_EVENT, (name, args, ack) => {
       commands.push({ name, args });
       const result = options.onCommand ? options.onCommand(name, args) : { ok: true, detail: 'ok' };
       // A handler returning undefined acks with no payload on purpose.
+      if (typeof ack === 'function') ack(result);
+    });
+
+    socket.on('rpc', (channel, args, ack) => {
+      rpcCalls.push({ channel, args });
+      // Device-token sessions only, exactly as the real namespace enforces.
+      if (socket.data.authMode !== 'device') return ack && ack({ error: 'forbidden' });
+      const result = options.onRpc ? options.onRpc(channel, args) : { result: [null, { channel }] };
       if (typeof ack === 'function') ack(result);
     });
   });
@@ -59,6 +108,9 @@ export async function startFakeServer(options = {}) {
     host: '127.0.0.1',
     apiKey,
     commands,
+    rpcCalls,
+    pairAttempts,
+    deviceToken,
     /** Push an event to every connected SDK socket. */
     push(event, ...args) {
       namespace.emit(event, ...args);
@@ -70,6 +122,14 @@ export async function startFakeServer(options = {}) {
     /** Forcibly drop all sockets — used to test disconnect handling. */
     dropAll() {
       for (const socket of sockets) socket.disconnect(true);
+    },
+    /** Revoke every device session, as the real server does on Revoke. */
+    revokeAll() {
+      for (const socket of sockets) {
+        if (socket.data.authMode !== 'device') continue;
+        socket.emit('revoked');
+        socket.disconnect(true);
+      }
     },
     async stop() {
       await io.close();
@@ -139,6 +199,25 @@ export async function startConnected(t, options) {
   });
   const connected = waitForEvent(client, 'connect');
   client.connect({ host: server.host, port: server.port, apiKey: server.apiKey });
+  await connected;
+  return { server, client };
+}
+
+/**
+ * As startConnected, but authenticating as a PAIRED DEVICE rather than an
+ * integration. The distinction is not cosmetic: only a device session may reach
+ * the management bridge, so anything testing rpc has to start here.
+ */
+export async function startConnectedDevice(t, options) {
+  const { ShowTrakControlClient } = await import('../../dist/index.js');
+  const server = await startFakeServer(options);
+  const client = new ShowTrakControlClient();
+  t.after(async () => {
+    client.disconnect();
+    await server.stop();
+  });
+  const connected = waitForEvent(client, 'connect');
+  client.connect({ host: server.host, port: server.port, deviceToken: server.deviceToken });
   await connected;
   return { server, client };
 }

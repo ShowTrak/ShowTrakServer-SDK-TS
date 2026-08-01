@@ -49,8 +49,7 @@ export function ScriptColourHex(index: unknown): string {
   // maps null, '' and false to 0, which would paint an *unset* colour red
   // instead of falling back to grey — and would disagree with the server's
   // SCRIPT_COLOURS[Index] lookup, where those all miss. Reject them up front.
-  const indexable =
-    typeof index === 'number' || (typeof index === 'string' && index.trim() !== '');
+  const indexable = typeof index === 'number' || (typeof index === 'string' && index.trim() !== '');
   const i = indexable ? Number(index) : Number.NaN;
   if (Number.isInteger(i) && i >= 0 && i < COLOUR_PALETTE.length) {
     return COLOUR_PALETTE[i]!.hex;
