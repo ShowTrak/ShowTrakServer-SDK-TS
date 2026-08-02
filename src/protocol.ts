@@ -96,26 +96,120 @@ export interface Vitals {
   Uptime: { Formatted: string };
 }
 
+/** One MAC the client is known by. The full set is its Wake-on-LAN targets. */
+export interface MacAddressView {
+  MacAddress: string;
+  InterfaceName?: string | null;
+}
+
+/**
+ * A USB device as the server serializes it, with its critical-marking
+ * annotations applied.
+ *
+ * Devices that report no serial number are guarded by name and quantity
+ * instead, which is why `ConnectedCount`/`Quantity`/`Shortfall` exist alongside
+ * the per-serial `IsConnected` — a keyboard hub that returns four of an expected
+ * five is neither present nor absent, and only the counts can say so.
+ */
+export interface UsbDeviceView {
+  ManufacturerName?: string | null;
+  ProductName?: string | null;
+  SerialNumber?: string | null;
+  IsCritical?: boolean;
+  IsConnected?: boolean;
+  IsCriticalByName?: boolean;
+  NameKey?: string;
+  Quantity?: number;
+  ConnectedCount?: number;
+  Shortfall?: boolean;
+  Missing?: boolean;
+}
+
+/** A display attached to the client, with its critical-marking annotations. */
+export interface DisplayView {
+  DisplayID?: string;
+  Label?: string | null;
+  IsCritical?: boolean;
+  IsConnected?: boolean;
+  /** The display is present but its resolution/position no longer match. */
+  Mismatch?: boolean;
+  CurrentSignature?: string | null;
+  ExpectedSignature?: string | null;
+}
+
+/**
+ * One address on an interface.
+ *
+ * Lower-case field names: the agent passes Node's `os.networkInterfaces()`
+ * entries through almost verbatim, and `family` is a string on older Node and
+ * the number 4/6 on newer — compare loosely.
+ */
+export interface NetworkAddressView {
+  family: string | number;
+  address: string;
+  netmask?: string | null;
+  cidr?: string | null;
+  mac?: string | null;
+  internal?: boolean;
+  scopeid?: number | null;
+  /** Server-side annotation: whether the address is currently live. */
+  active?: boolean;
+}
+
+export interface NetworkInterfaceView {
+  name: string;
+  addresses: NetworkAddressView[];
+}
+
+export interface RunningApplicationView {
+  Name: string;
+  Count: number;
+  Key?: string;
+  IsCritical?: boolean;
+  IsRunning?: boolean;
+}
+
+/**
+ * The client's running-application snapshot.
+ *
+ * `Status.State` matters as much as the list: a client that cannot enumerate
+ * processes (`permission_denied` on macOS without Full Disk Access) reports an
+ * EMPTY list, which is indistinguishable from "nothing running" unless the state
+ * is read too.
+ */
+export interface RunningApplicationsView {
+  SampledAt?: number;
+  TotalCount?: number;
+  Truncated?: boolean;
+  Items?: RunningApplicationView[];
+  Status?: {
+    State: 'unknown' | 'ok' | 'error' | 'permission_denied' | (string & {});
+    Message?: string | null;
+    Platform?: string;
+  };
+}
+
 /**
  * The full server-side client record, as `GetClient` answers it.
  *
- * Deliberately looser than ClientView: this is the desktop's own object, and it
- * carries fields (USB inventory, displays, network interfaces, running
- * applications) whose shapes are the server's business rather than this SDK's.
- * Naming the ones a detail view actually reads, and leaving the rest indexable,
- * is the honest middle — mirroring every internal column here would be a second
- * schema to keep in step for no gain.
+ * A superset of ClientView: the same identity and status fields plus the
+ * inventory the desktop's Client Info panel reads — every MAC, the USB devices,
+ * the displays, the network interfaces and the running applications.
+ *
+ * The index signature stays. This is the desktop's own object and it carries
+ * more columns than any consumer reads; declaring the ones a detail view
+ * actually uses and leaving the rest indexable is the honest middle, because
+ * mirroring every internal column here would be a second schema to keep in step
+ * for no gain.
  */
 export interface ClientDetail extends ClientView {
   MacAddress?: string | null;
-  MacAddresses?: unknown[];
+  MacAddresses?: MacAddressView[];
   LastSeen?: number | null;
-  USBDeviceList?: unknown[];
-  CriticalUSBDevices?: unknown[];
-  MissingCriticalUSBDevices?: unknown[];
-  DisplayList?: unknown[];
-  NetworkInterfaces?: unknown[];
-  RunningApplications?: unknown;
+  USBDeviceList?: UsbDeviceView[];
+  DisplayList?: DisplayView[];
+  NetworkInterfaces?: NetworkInterfaceView[];
+  RunningApplications?: RunningApplicationsView;
   [key: string]: unknown;
 }
 
