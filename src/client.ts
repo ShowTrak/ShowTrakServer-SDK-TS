@@ -34,6 +34,7 @@ import type {
   CommandResult,
   GroupView,
   ScriptView,
+  ScriptExecutionView,
   TagScope,
   TagView,
 } from './protocol.js';
@@ -91,6 +92,8 @@ interface Events {
   modeChanged: [mode: AppMode];
   alertsChanged: [enabled: boolean];
   scriptsChanged: [];
+  /** The live script-execution list changed — one started, moved on, or ended. */
+  scriptExecutionsChanged: [executions: ScriptExecutionView[]];
   notify: [message: string, type: string, duration: number];
 }
 
@@ -193,6 +196,10 @@ export class ShowTrakControlClient {
   private groupsBySlug = new Map<string, GroupView>();
   private tagsBySlug = new Map<string, TagView>();
   private scriptsById = new Map<string, ScriptView>();
+  // Held as the server's own ordered list rather than a map. The order IS
+  // information — the manager appends, so each client is visibly working down
+  // its own queue — and re-keying it would throw that away.
+  private scriptExecutions: ScriptExecutionView[] = [];
   private mode: AppMode = 'SHOW';
   private alertsEnabled = true;
   // Whether this session authenticated as a paired device. Only a device may
@@ -211,6 +218,7 @@ export class ShowTrakControlClient {
     modeChanged: new Set(),
     alertsChanged: new Set(),
     scriptsChanged: new Set(),
+    scriptExecutionsChanged: new Set(),
     notify: new Set(),
     revoked: new Set(),
     capabilitiesChanged: new Set(),
@@ -249,6 +257,11 @@ export class ShowTrakControlClient {
     this.groupsBySlug.clear();
     this.tagsBySlug.clear();
     this.scriptsById.clear();
+    // Dropped along with everything else, and this one matters more than most:
+    // an execution list is a claim about what is happening RIGHT NOW, so
+    // carrying it across a disconnect would leave a UI showing a script as
+    // still running long after we stopped being told otherwise.
+    this.scriptExecutions = [];
     this.setState('disconnected');
   }
 
@@ -445,6 +458,18 @@ export class ShowTrakControlClient {
 
   getScripts(): ScriptView[] {
     return Array.from(this.scriptsById.values());
+  }
+
+  /**
+   * Script executions the server currently knows about, in its own order.
+   *
+   * Includes settled ones: the server keeps a finished execution in the list so
+   * an operator can see what a run did, and clears it on its own schedule. A UI
+   * that only wants live work should filter on `Status === 'Pending'` rather
+   * than expect this to empty itself.
+   */
+  getScriptExecutions(): ScriptExecutionView[] {
+    return this.scriptExecutions;
   }
 
   getMode(): AppMode {
@@ -763,6 +788,13 @@ export class ShowTrakControlClient {
     // in a reconnect loop against a dead credential.
     socket.on('revoked', () => {
       this.emit('revoked');
+    });
+
+    // The whole list, every time it changes — so a device that connects
+    // mid-run sees work already in flight instead of only what starts later.
+    socket.on('UpdateScriptExecutions', (executions: ScriptExecutionView[]) => {
+      this.scriptExecutions = Array.isArray(executions) ? executions : [];
+      this.emit('scriptExecutionsChanged', this.scriptExecutions);
     });
 
     socket.on('AlertActionsUpdated', (enabled: boolean) => {

@@ -259,6 +259,48 @@ export interface ScriptView {
 
 export type AppMode = 'SHOW' | 'EDIT';
 
+/**
+ * Where a script execution has got to.
+ *
+ * Note there is no separate "running" state: a queued execution and a running
+ * one are BOTH `Pending`, and only `StatusText` distinguishes them (it reads
+ * "Queued" while a client works through its backlog). That is the server's
+ * model, not a simplification here — do not infer running-ness from the status.
+ */
+export type ScriptExecutionStatus = 'Pending' | 'Failed' | 'Completed';
+
+/**
+ * One script execution, live.
+ *
+ * The server keeps a list of these and re-broadcasts the whole list on every
+ * change, which is what lets a late-joining device show work already in flight
+ * rather than only what starts after it connected.
+ *
+ * `Internal` marks executions the server raised for itself rather than for an
+ * operator — script deployment, integrated actions. The desktop hides some of
+ * these, and anything mirroring its execution panel should decide deliberately
+ * rather than showing housekeeping as though someone asked for it.
+ */
+export interface ScriptExecutionView {
+  Internal: boolean;
+  RequestID: string;
+  Status: ScriptExecutionStatus;
+  /** 0–100. Meaningful only while Pending; a settled execution sits at 100. */
+  Progress: number;
+  /** What the client last said it was doing, or "Queued" before it starts. */
+  StatusText: string;
+  Timer: {
+    Start: number;
+    /** Epoch ms when it settled; null while it is still queued or running. */
+    End: number | null;
+    /** Milliseconds taken; null until it settles. */
+    Duration: number | null;
+  };
+  Client: { UUID: string | null; Nickname: string | null; Hostname: string | null };
+  Script: { ID: string; Name: string };
+  Error: string | null;
+}
+
 // --- Push channels (server → client) -------------------------------------
 
 /**
