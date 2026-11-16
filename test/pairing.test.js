@@ -276,3 +276,50 @@ test('probing distinguishes a refused permission from a handler that simply fail
   assert.equal(Caps.groupManagement, false, 'a refusal was read as permission');
   assert.equal(Caps.clientManagement, true, 'a handler error was read as a refusal');
 });
+
+test('the remote script category is probed, and reads as off until it is', async (t) => {
+  // Off by default on the server, so assuming it on would offer an audio slider
+  // and remote events that every tap then fails.
+  const { client } = await startConnectedDevice(t, {
+    onRpc: (channel) => {
+      if (channel === 'TriggerIntegratedEvent') return { error: 'forbidden' };
+      return { result: ['No such client', null] };
+    },
+  });
+  assert.equal(client.getCapabilities().remoteScripts, false, 'assumed before probing');
+  const Caps = await client.refreshCapabilities();
+  assert.equal(Caps.remoteScripts, false);
+  assert.equal(Caps.scripts, true, 'the command bridge is a separate gate');
+});
+
+test('a permitted remote script category reads as on after probing', async (t) => {
+  const { client } = await startConnectedDevice(t, {
+    onRpc: () => ({ result: ['Invalid event id', null] }),
+  });
+  const Caps = await client.refreshCapabilities();
+  assert.equal(Caps.remoteScripts, true);
+});
+
+test('a probe made in SHOW mode does not read the mode gate as a refusal', async (t) => {
+  // In SHOW mode the server answers edit_mode_required before it looks at the
+  // permission, so that answer says nothing about it. Reading it as "forbidden"
+  // hid every editor for the rest of the session once the server entered EDIT.
+  let Mode = 'SHOW';
+  const { server: Server, client } = await startConnectedDevice(t, {
+    onRpc: (channel) => {
+      if (channel === 'UpdateClient') {
+        return Mode === 'EDIT'
+          ? { result: ['No such client', null] }
+          : { error: 'edit_mode_required' };
+      }
+      return { result: ['No such client', null] };
+    },
+  });
+  await client.refreshCapabilities();
+  Mode = 'EDIT';
+  const Reprobed = waitForEvent(client, 'capabilitiesChanged');
+  Server.push('ModeUpdated', 'EDIT');
+  await Reprobed;
+  await new Promise((r) => setTimeout(r, 100));
+  assert.equal(client.getCapabilities().clientManagement, true);
+});

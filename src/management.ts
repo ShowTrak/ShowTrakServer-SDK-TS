@@ -87,7 +87,17 @@ export interface Capabilities {
   monitoringManagement: boolean;
   alertManagement: boolean;
   identify: boolean;
+  /** Run a monitoring check's device controls. Not gated on EDIT mode. */
+  monitoringActions: boolean;
+  /** Run scripts through the command bridge. */
   scripts: boolean;
+  /**
+   * The management bridge's show-time script category: setting a client's audio
+   * level and triggering an integrated client's events. Governed by the server's
+   * remote script execution permission, which is OFF by default, unlike the
+   * command bridge's script runs.
+   */
+  remoteScripts: boolean;
   wol: boolean;
 }
 
@@ -99,6 +109,12 @@ export const RPC_CHANNELS = {
   GetClientApplicationHistory: 'GetClientApplicationHistory',
   GetClientUSBHistory: 'GetClientUSBHistory',
   GetClientDisplayHistory: 'GetClientDisplayHistory',
+  GetClientAudioHistory: 'GetClientAudioHistory',
+  GetClientNetworkHistory: 'GetClientNetworkHistory',
+  GetClientStorageHistory: 'GetClientStorageHistory',
+  GetClientSystemCheckHistory: 'GetClientSystemCheckHistory',
+  GetClientVitalsHistory: 'GetClientVitalsHistory',
+  GetClientVariables: 'Variables:GetForClient',
   GetAllGroups: 'GetAllGroups',
   GetAllMonitoringTargets: 'GetAllMonitoringTargets',
   GetMonitoringTarget: 'GetMonitoringTarget',
@@ -111,6 +127,18 @@ export const RPC_CHANNELS = {
   GetAlertRule: 'GetAlertRule',
   GetAllTags: 'Tags:GetAll',
   GetMode: 'Mode:Get',
+  GetMonitoringMethods: 'GetMonitoringMethods',
+  GetMonitoringActionFavourites: 'GetMonitoringActionFavourites',
+  GetDummyClientHistory: 'GetDummyClientHistory',
+  GetFreeKioskMetrics: 'FreeKiosk:GetMetrics',
+  GetFreeKioskCommands: 'FreeKiosk:GetCommands',
+  GetFreeKioskHistory: 'FreeKiosk:GetHistory',
+  GetFreeKioskCameraList: 'FreeKiosk:GetCameraList',
+  GetAuditLog: 'AuditLog:Get',
+
+  // Monitoring actions — device controls a check type declares. Allowed in SHOW
+  // mode: running the show is what they are for. Gated by their own permission.
+  RunMonitoringAction: 'RunMonitoringAction',
 
   // Client management.
   UpdateClient: 'UpdateClient',
@@ -130,12 +158,22 @@ export const RPC_CHANNELS = {
   UpdateMonitoringTarget: 'UpdateMonitoringTarget',
   DeleteMonitoringTarget: 'DeleteMonitoringTarget',
   RunMonitoringCheckNow: 'RunMonitoringCheckNow',
+  // FreeKiosk controls count as monitoring management: EDIT mode and its permission.
+  FreeKioskCommand: 'FreeKiosk:Command',
+  FreeKioskRunNow: 'FreeKiosk:RunNow',
+  FreeKioskCaptureScreenshot: 'FreeKiosk:CaptureScreenshot',
+  FreeKioskCaptureCamera: 'FreeKiosk:CaptureCamera',
 
   // Alert rules.
   CreateAlertRule: 'CreateAlertRule',
   UpdateAlertRule: 'UpdateAlertRule',
   DeleteAlertRule: 'DeleteAlertRule',
   SetAlertRuleEnabled: 'SetAlertRuleEnabled',
+
+  // Show-time script category: behind the remote script execution permission,
+  // not gated on EDIT mode.
+  SetClientAudioLevel: 'SetClientAudioLevel',
+  TriggerIntegratedEvent: 'TriggerIntegratedEvent',
 
   // Identify — safe in SHOW mode; it draws an overlay and mutates nothing.
   IdentifyClient: 'IdentifyClient',

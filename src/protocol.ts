@@ -4,6 +4,16 @@
 // (only the fields integrations consume) so it does not track every internal
 // field the server serializes. See constants.ts for the sync note.
 
+import type {
+  AudioDevicesView,
+  ClientResourceAlarm,
+  ClientSystemChecks,
+  NetworkStatusView,
+  PowerStatusSnapshot,
+  StorageStatusView,
+  TemperaturesSnapshot,
+} from './entities.js';
+
 // --- Views (server → client push payloads) -------------------------------
 
 /** Integrated (SDK) client action / event catalog entry. */
@@ -82,6 +92,34 @@ export interface ClientView {
 
   /** Why a client is degraded, one message per problem. Empty when healthy. */
   DegradedWarnings?: string[];
+
+  // --- Health telemetry -----------------------------------------------------
+  // What the desktop's Storage, Audio, Network, Usage and Power & Thermal tabs
+  // read. Absent on older servers and on entities that are not real clients.
+
+  /** Online but still completing its first report. */
+  Initialising?: boolean;
+  /** Epoch ms the machine last booted. */
+  BootTime?: number | null;
+  SystemChecks?: ClientSystemChecks;
+  /** Monitored system checks currently breaching. */
+  ResourceAlarms?: ClientResourceAlarm[];
+  PowerStatus?: PowerStatusSnapshot | null;
+  Temperatures?: TemperaturesSnapshot | null;
+  AudioDevices?: AudioDevicesView;
+  NetworkStatus?: NetworkStatusView;
+  StorageStatus?: StorageStatusView;
+  /** What the client can report about its USB devices. */
+  USBCapabilities?: { Location: boolean; FirmwareVersion: boolean; DeviceState: boolean } | null;
+  /** The MAC serving its socket address, and every MAC on record (its Wake-on-LAN targets). */
+  MacAddress?: string | null;
+  MacAddresses?: MacAddressView[];
+  Version?: string;
+  /** Live USB devices, plus monitored ones that are not connected. */
+  USBDeviceList?: UsbDeviceView[];
+  /** Displays, plus monitored ones that are not connected. */
+  DisplayList?: DisplayView[];
+  RunningApplications?: RunningApplicationsView;
 }
 
 /** Live telemetry a client reports on every heartbeat. */
@@ -100,6 +138,10 @@ export interface Vitals {
 export interface MacAddressView {
   MacAddress: string;
   InterfaceName?: string | null;
+  /** Reported by the client, or added by hand at the desk. */
+  Source?: 'Reported' | 'Manual';
+  FirstSeen?: number;
+  LastSeen?: number;
 }
 
 /**
@@ -119,6 +161,17 @@ export interface UsbDeviceView {
   IsConnected?: boolean;
   IsCriticalByName?: boolean;
   NameKey?: string;
+  /** Bus and port path, e.g. `1-1.2`; comma-separated when guarded by name. */
+  Location?: string | null;
+  FirmwareVersion?: string | null;
+  DeviceState?: { ErrorCode: number; Message: string | null } | null;
+  Issues?: Array<{ Kind: string; Message: string }>;
+  Critical?: {
+    Location: string | null;
+    FirmwareVersion: string | null;
+    RequireNoError: boolean;
+    [key: string]: unknown;
+  } | null;
   Quantity?: number;
   ConnectedCount?: number;
   Shortfall?: boolean;
@@ -135,6 +188,28 @@ export interface DisplayView {
   Mismatch?: boolean;
   CurrentSignature?: string | null;
   ExpectedSignature?: string | null;
+  ScreenNumber?: number;
+  Width?: number;
+  Height?: number;
+  ScaleFactor?: number;
+  RefreshRate?: number | null;
+  Rotation?: number;
+  Primary?: boolean;
+  Bounds?: { x: number; y: number; width: number; height: number };
+  Missing?: boolean;
+  Issues?: Array<{ Kind: string; Message: string }>;
+  Critical?: {
+    DisplayID?: string;
+    RequirePresent?: boolean;
+    Width: number | null;
+    Height: number | null;
+    RefreshRate: number | null;
+    ScaleFactor: number | null;
+    Rotation: number | null;
+    RequirePrimary: boolean;
+    PositionX: number | null;
+    PositionY: number | null;
+  } | null;
 }
 
 /**
@@ -167,6 +242,11 @@ export interface RunningApplicationView {
   Key?: string;
   IsCritical?: boolean;
   IsRunning?: boolean;
+  /** Null when the platform cannot tell. */
+  Responding?: boolean | null;
+  IsForeground?: boolean;
+  RequireForeground?: boolean;
+  RequireResponding?: boolean;
 }
 
 /**
@@ -187,6 +267,9 @@ export interface RunningApplicationsView {
     Message?: string | null;
     Platform?: string;
   };
+  /** The application in front, when the platform can say. */
+  Foreground?: string | null;
+  Capabilities?: { Responding: boolean; Foreground: boolean } | null;
 }
 
 /**
@@ -210,6 +293,11 @@ export interface ClientDetail extends ClientView {
   DisplayList?: DisplayView[];
   NetworkInterfaces?: NetworkInterfaceView[];
   RunningApplications?: RunningApplicationsView;
+  /** The script the client runs when it starts, and its delay. Clients only. */
+  RunOnLaunchScriptID?: string | null;
+  RunOnLaunchDelaySeconds?: number | null;
+  /** Seconds a client may be silent before it reads offline; null for the server default. */
+  OfflineGraceSeconds?: number | null;
   [key: string]: unknown;
 }
 
@@ -220,6 +308,10 @@ export interface GroupView {
   Slug: string | null;
   Weight?: number;
   isFullWidth?: boolean;
+  /** Columns the group's box spans in the desktop grid. Absent on older servers. */
+  ColumnSpan?: number;
+  /** Index into the desktop's group palette, or null for no tint. */
+  Colour?: number | null;
 }
 
 /**
@@ -248,13 +340,33 @@ export interface TagView {
   Scope?: TagScope;
 }
 
+/**
+ * How firmly a script asks before it runs. `Critical` is the desktop's loud
+ * variant, which names every target and defaults to Cancel.
+ */
+export type ScriptConfirmationLevel = 'None' | 'Standard' | 'Critical';
+
 /** Public projection of a script catalog entry (ID is the script slug). */
 export interface ScriptView {
   ID: string;
   Name: string;
   Colour?: number;
   Icon?: string | null;
+  /** Whether to ask at all. Older servers send only this; see ConfirmationLevel. */
   Confirmation?: boolean;
+  /** Absent on servers predating levels, where `Confirmation: true` means Standard. */
+  ConfirmationLevel?: ScriptConfirmationLevel;
+
+  // --- Targeting -----------------------------------------------------------
+  // What decides which clients a script is offered on. See IsScriptTargetable;
+  // the server re-checks the whitelist on dispatch regardless.
+
+  /** Operating systems the script has an entry point for (`Windows`, `macOS`, `Linux`). */
+  CompatiblePlatforms?: string[];
+  /** False for a script switched off by its author, or whose Script.json failed to parse. */
+  isEnabled?: boolean;
+  /** Per-show restriction on which clients may run it; null means unrestricted. */
+  Whitelist?: TagScope | null;
 }
 
 export type AppMode = 'SHOW' | 'EDIT';
@@ -301,6 +413,22 @@ export interface ScriptExecutionView {
   Error: string | null;
 }
 
+/**
+ * A device announcing itself on the network but not yet adopted into the
+ * workspace. Pushed in full whenever the list changes (and once on connect, on
+ * servers that send it), so a remote can offer Adopt and Identify for it.
+ */
+export interface PendingAdoptionView {
+  UUID: string;
+  Hostname: string;
+  IP: string;
+  Version: string;
+  /** 'Pending', or 'Adopting' once an adoption has been asked for. */
+  State: string;
+  /** Identify mode is running on it. */
+  Identifying: boolean;
+}
+
 // --- Push channels (server → client) -------------------------------------
 
 /**
@@ -320,6 +448,7 @@ export interface ServerPushEvents {
   ModeUpdated: (mode: AppMode) => void;
   AlertActionsUpdated: (enabled: boolean) => void;
   Notify: (message: string, type?: string, duration?: number) => void;
+  SetDevicesPendingAdoption: (devices: PendingAdoptionView[]) => void;
 }
 
 export type ServerPushChannel = keyof ServerPushEvents;

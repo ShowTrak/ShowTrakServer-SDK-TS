@@ -26,8 +26,33 @@ import {
 } from './management.js';
 import { Pair, type PairOptions, type PairResult } from './pairing.js';
 import type {
+  AlertRuleView,
+  AlertSoundName,
+  CustomAlertAudio,
+  MonitoringActionFavouriteView,
+  PublicSetting,
+  ShowTrakAlert,
+  AuditLogPage,
+  AuditLogQuery,
+  ClientHistorySeries,
+  ClientVariableView,
+  ClientVitalsHistory,
+  DummyClientView,
+  FreeKioskCommandDef,
+  FreeKioskCapture,
+  FreeKioskCommandSummary,
+  FreeKioskMetricCatalog,
+  FreeKioskMetricSeries,
+  FreeKioskTerminalView,
+  MonitoringActionSummary,
+  MonitorLiveLevelsSnapshot,
+  MonitoringMethodView,
+  MonitoringTargetView,
+} from './entities.js';
+import type {
   AppMode,
   ClientDetail,
+  PendingAdoptionView,
   ClientView,
   CommandArgs,
   CommandName,
@@ -69,7 +94,9 @@ interface SurfacePermissionSnapshot {
   monitoringManagement: boolean;
   alertManagement: boolean;
   identify: boolean;
+  monitoringActions: boolean;
   scripts: boolean;
+  remoteScripts: boolean;
   wol: boolean;
 }
 
@@ -92,9 +119,32 @@ interface Events {
   modeChanged: [mode: AppMode];
   alertsChanged: [enabled: boolean];
   scriptsChanged: [];
+  /**
+   * A monitor's live audio meters, while open with openLiveLevels. Sent in full
+   * on every update, a few times a second.
+   */
+  liveLevels: [snapshot: MonitorLiveLevelsSnapshot];
   /** The live script-execution list changed — one started, moved on, or ended. */
   scriptExecutionsChanged: [executions: ScriptExecutionView[]];
   notify: [message: string, type: string, duration: number];
+  /** An alert rule raised a ShowTrak alert. Paired devices only. */
+  alert: [alert: ShowTrakAlert];
+  /** An alert rule asked for one of the built-in sounds. */
+  playSound: [name: AlertSoundName];
+  /** An alert rule asked for a custom sound; its audio comes inline. */
+  playCustomAudio: [audio: CustomAlertAudio];
+  /** The custom alert sounds changed; re-read them if they are on screen. */
+  audioAssetsChanged: [];
+  /** A monitoring action was starred or unstarred. See getMonitoringFavourites. */
+  favouritesChanged: [favourites: MonitoringActionFavouriteView[]];
+  /** An alert rule was created, edited, enabled or deleted. See getAlertRules. */
+  alertRulesChanged: [rules: AlertRuleView[]];
+  /** A new audit log line; open log views can fetch it rather than poll. */
+  auditLogAppended: [entry: unknown];
+  /** The public display settings changed. See getPublicSettings. */
+  settingsChanged: [settings: PublicSetting[]];
+  /** Devices waiting to be adopted changed — one appeared, left, or started identifying. */
+  pendingAdoptionChanged: [devices: PendingAdoptionView[]];
 }
 
 /**
@@ -180,6 +230,45 @@ function ScopeIdCandidates(uuid: string): string[] {
   return [uuid];
 }
 
+/**
+ * True when a scope covers a client. Mirrors the server's
+ * ScriptWhitelistManager.IsClientAllowed, which is the rule for BOTH a tag's
+ * membership and a script's whitelist, so feedback here matches dispatch there.
+ *
+ * An absent scope, or `Workspace: true`, covers everything. A scope may absorb
+ * other tags (making it a superset of them), so this is a graph walk rather than
+ * a lookup; `visited` breaks the cycle an operator can author by adding each of
+ * two tags to the other. `tags` is the full tag list, needed only to expand
+ * those nested tags.
+ */
+export function ScopeCoversClient(
+  scope: TagScope | null | undefined,
+  client: Pick<ClientView, 'UUID' | 'GroupID'> | null | undefined,
+  tags: readonly TagView[] = [],
+  visited: Set<number> = new Set()
+): boolean {
+  if (!scope || scope.Workspace) return true;
+  if (!client || !client.UUID) return false;
+  const Clients = Array.isArray(scope.Clients) ? scope.Clients : [];
+  const Groups = Array.isArray(scope.Groups) ? scope.Groups : [];
+  // Not just client.UUID: a dummy or a FreeKiosk terminal is pushed with a
+  // prefixed uuid but recorded in a tag scope bare, so comparing only the
+  // pushed form silently drops it from the tag. See AUXILIARY_ENTITIES.
+  if (ScopeIdCandidates(client.UUID).some((Id) => Clients.includes(Id))) return true;
+  if (client.GroupID != null && Groups.map(Number).includes(Number(client.GroupID))) return true;
+  for (const raw of Array.isArray(scope.Tags) ? scope.Tags : []) {
+    const tagID = Number(raw);
+    if (!Number.isInteger(tagID) || visited.has(tagID)) continue;
+    visited.add(tagID);
+    const nested = tags.find((t) => Number(t.TagID) === tagID);
+    // An unknown TagID (deleted tag still named by a stale scope) contributes
+    // no members — it must never widen the scope.
+    if (!nested || !nested.Scope) continue;
+    if (ScopeCoversClient(nested.Scope, client, tags, visited)) return true;
+  }
+  return false;
+}
+
 export class ShowTrakControlClient {
   private socket: Socket | null = null;
   private state: ConnectionState = 'disconnected';
@@ -200,8 +289,13 @@ export class ShowTrakControlClient {
   // information — the manager appends, so each client is visibly working down
   // its own queue — and re-keying it would throw that away.
   private scriptExecutions: ScriptExecutionView[] = [];
+  private favourites: MonitoringActionFavouriteView[] = [];
+  private alertRules: AlertRuleView[] = [];
+  private publicSettings: PublicSetting[] = [];
   private mode: AppMode = 'SHOW';
   private alertsEnabled = true;
+  // Devices on the network waiting to be adopted, as the server's own list.
+  private pendingAdoption: PendingAdoptionView[] = [];
   // Whether this session authenticated as a paired device. Only a device may
   // reach the management bridge, so an API-key session reports no management
   // capabilities rather than offering controls the server will refuse.
@@ -220,8 +314,18 @@ export class ShowTrakControlClient {
     scriptsChanged: new Set(),
     scriptExecutionsChanged: new Set(),
     notify: new Set(),
+    pendingAdoptionChanged: new Set(),
     revoked: new Set(),
     capabilitiesChanged: new Set(),
+    liveLevels: new Set(),
+    alert: new Set(),
+    playSound: new Set(),
+    playCustomAudio: new Set(),
+    audioAssetsChanged: new Set(),
+    favouritesChanged: new Set(),
+    alertRulesChanged: new Set(),
+    auditLogAppended: new Set(),
+    settingsChanged: new Set(),
   };
 
   // --- Lifecycle ---------------------------------------------------------
@@ -262,6 +366,8 @@ export class ShowTrakControlClient {
     // carrying it across a disconnect would leave a UI showing a script as
     // still running long after we stopped being told otherwise.
     this.scriptExecutions = [];
+    // Same reasoning: a device listed as waiting may have been adopted or left.
+    this.pendingAdoption = [];
     this.setState('disconnected');
   }
 
@@ -368,35 +474,9 @@ export class ShowTrakControlClient {
     return 'ONLINE';
   }
 
-  /** True when a client falls inside a tag's dynamic scope. Mirrors the server's
-   *  ScriptWhitelistManager.IsClientAllowed so companion feedback matches dispatch.
-   *
-   *  A tag may absorb other tags (making it a superset of them), so this is a
-   *  graph walk rather than a lookup. `visited` breaks the cycle an operator can
-   *  author by adding each of two tags to the other. */
-  private clientInTagScope(
-    scope: TagScope | undefined,
-    client: ClientView,
-    visited: Set<number> = new Set()
-  ): boolean {
-    if (!scope || scope.Workspace) return true;
-    if (!client || !client.UUID) return false;
-    // Not just client.UUID: a dummy or a FreeKiosk terminal is pushed with a
-    // prefixed uuid but recorded in a tag scope bare, so comparing only the
-    // pushed form silently drops it from the tag. See AUXILIARY_ENTITIES.
-    if (ScopeIdCandidates(client.UUID).some((Id) => scope.Clients.includes(Id))) return true;
-    if (client.GroupID != null && scope.Groups.includes(Number(client.GroupID))) return true;
-    for (const raw of Array.isArray(scope.Tags) ? scope.Tags : []) {
-      const tagID = Number(raw);
-      if (!Number.isInteger(tagID) || visited.has(tagID)) continue;
-      visited.add(tagID);
-      const nested = this.getTags().find((t) => Number(t.TagID) === tagID);
-      // An unknown TagID (deleted tag still named by a stale scope) contributes
-      // no members — it must never widen the scope.
-      if (!nested || !nested.Scope) continue;
-      if (this.clientInTagScope(nested.Scope, client, visited)) return true;
-    }
-    return false;
+  /** True when a client falls inside a tag's dynamic scope. See ScopeCoversClient. */
+  private clientInTagScope(scope: TagScope | undefined, client: ClientView): boolean {
+    return ScopeCoversClient(scope, client, this.getTags());
   }
 
   /** Aggregate status of a group's members (degraded > online > idle > offline). */
@@ -468,8 +548,32 @@ export class ShowTrakControlClient {
    * that only wants live work should filter on `Status === 'Pending'` rather
    * than expect this to empty itself.
    */
+  /** Starred monitoring actions, newest list from the server. Paired devices only. */
+  getMonitoringFavourites(): MonitoringActionFavouriteView[] {
+    return this.favourites;
+  }
+
+  /** Every alert rule, newest first. Paired devices only. */
+  getAlertRules(): AlertRuleView[] {
+    return this.alertRules;
+  }
+
+  /** The display settings a remote surface may read (column count, default view, …). */
+  getPublicSettings(): PublicSetting[] {
+    return this.publicSettings;
+  }
+
   getScriptExecutions(): ScriptExecutionView[] {
     return this.scriptExecutions;
+  }
+
+  /**
+   * Devices announcing themselves on the network but not yet adopted. Empty on
+   * a server that does not forward the list; adopting and identifying them
+   * needs Edit mode and client management (see getCapabilities()).
+   */
+  getPendingAdoption(): PendingAdoptionView[] {
+    return this.pendingAdoption;
   }
 
   getMode(): AppMode {
@@ -606,7 +710,9 @@ export class ShowTrakControlClient {
       monitoringManagement: Allowed && Edit && (P?.monitoringManagement ?? true),
       alertManagement: Allowed && Edit && (P?.alertManagement ?? true),
       identify: Allowed && (P?.identify ?? true),
+      monitoringActions: Allowed && (P?.monitoringActions ?? true),
       scripts: P?.scripts ?? true,
+      remoteScripts: Allowed && (P?.remoteScripts ?? false),
       wol: P?.wol ?? true,
     };
   }
@@ -626,21 +732,51 @@ export class ShowTrakControlClient {
       this.permissions = null;
       return this.getCapabilities();
     }
-    const Probe = async (channel: RpcChannel, args: unknown[]): Promise<boolean> => {
+    const Previous = this.permissions;
+    // `null` when the answer says nothing about the permission: in SHOW mode the
+    // server refuses every management call with edit_mode_required BEFORE it
+    // looks at the permission, so a probe made then cannot tell. The last known
+    // answer (or the optimistic default) stands, and the probe runs again when
+    // the server enters EDIT mode.
+    const Probe = async (channel: RpcChannel, args: unknown[]): Promise<boolean | null> => {
       const Result = await this.rpc(channel, args);
       // Only an authorisation refusal means "not permitted". A handler that ran
       // and failed (bad id, missing client) proves the permission IS granted.
       if (Result.ok) return true;
-      return Result.code !== 'forbidden' && Result.code !== 'edit_mode_required';
+      if (Result.code === 'edit_mode_required') return null;
+      return Result.code !== 'forbidden';
     };
+    const Known = (answer: boolean | null, key: keyof SurfacePermissionSnapshot): boolean =>
+      answer ?? Previous?.[key] ?? true;
     const NoSuchSlug = '__showtrak_capability_probe__';
     this.permissions = {
-      clientManagement: await Probe(RPC_CHANNELS.UpdateClient, [NoSuchSlug, {}]),
-      groupManagement: await Probe(RPC_CHANNELS.RenameGroup, [-1, '']),
-      monitoringManagement: await Probe(RPC_CHANNELS.RunMonitoringCheckNow, [-1]),
-      alertManagement: await Probe(RPC_CHANNELS.SetAlertRuleEnabled, [-1, false]),
-      identify: await Probe(RPC_CHANNELS.IdentifyClient, [NoSuchSlug]),
+      clientManagement: Known(
+        await Probe(RPC_CHANNELS.UpdateClient, [NoSuchSlug, {}]),
+        'clientManagement'
+      ),
+      groupManagement: Known(await Probe(RPC_CHANNELS.RenameGroup, [-1, '']), 'groupManagement'),
+      monitoringManagement: Known(
+        await Probe(RPC_CHANNELS.RunMonitoringCheckNow, [-1]),
+        'monitoringManagement'
+      ),
+      alertManagement: Known(
+        await Probe(RPC_CHANNELS.SetAlertRuleEnabled, [-1, false]),
+        'alertManagement'
+      ),
+      identify: Known(await Probe(RPC_CHANNELS.IdentifyClient, [NoSuchSlug]), 'identify'),
+      // No target -1 exists, so a permitted call fails in the handler instead.
+      monitoringActions: Known(
+        await Probe(RPC_CHANNELS.RunMonitoringAction, [[-1], '', '', {}, null]),
+        'monitoringActions'
+      ),
       scripts: true,
+      // An empty event id fails the handler's validation, so a permitted call
+      // changes nothing and a forbidden one never reaches it. Off until proven,
+      // as the server's default is off.
+      remoteScripts:
+        (await Probe(RPC_CHANNELS.TriggerIntegratedEvent, ['', []])) ??
+        Previous?.remoteScripts ??
+        false,
       wol: true,
     };
     this.emit('capabilitiesChanged');
@@ -673,7 +809,124 @@ export class ShowTrakControlClient {
   /** One series per display. */
   getClientDisplayHistory = (uuid: string) =>
     this.rpc<NamedHistorySeries[]>(RPC_CHANNELS.GetClientDisplayHistory, [uuid]);
+  /** One series per audio endpoint, network interface, volume or system check. */
+  getClientAudioHistory = (uuid: string) =>
+    this.rpc<ClientHistorySeries[]>(RPC_CHANNELS.GetClientAudioHistory, [uuid]);
+  getClientNetworkHistory = (uuid: string) =>
+    this.rpc<ClientHistorySeries[]>(RPC_CHANNELS.GetClientNetworkHistory, [uuid]);
+  getClientStorageHistory = (uuid: string) =>
+    this.rpc<ClientHistorySeries[]>(RPC_CHANNELS.GetClientStorageHistory, [uuid]);
+  getClientSystemCheckHistory = (uuid: string) =>
+    this.rpc<ClientHistorySeries[]>(RPC_CHANNELS.GetClientSystemCheckHistory, [uuid]);
+  /** CPU and RAM readings for the usage charts. */
+  getClientVitalsHistory = (uuid: string) =>
+    this.rpc<ClientVitalsHistory>(RPC_CHANNELS.GetClientVitalsHistory, [uuid]);
+  /** Every show variable as this client resolves it. */
+  getClientVariables = (uuid: string) =>
+    this.rpc<ClientVariableView[]>(RPC_CHANNELS.GetClientVariables, [uuid]);
   getAllMonitoringTargets = () => this.rpc<ResultTuple>(RPC_CHANNELS.GetAllMonitoringTargets, []);
+
+  // Entity views. Readers answer the value directly (null or [] when the id is
+  // unknown), not a [Err, Data] tuple. Ids are the bare ones — see EntityAddress.
+
+  /** A monitoring target with every check. */
+  getMonitoringTarget = (targetId: number) =>
+    this.rpc<MonitoringTargetView | null>(RPC_CHANNELS.GetMonitoringTarget, [targetId]);
+  /** One check's online/degraded timeline. */
+  getMonitoringCheckHistory = (checkId: number) =>
+    this.rpc<HistorySample[]>(RPC_CHANNELS.GetMonitoringCheckHistory, [checkId]);
+  /** Every check type, with the actions each declares. */
+  getMonitoringMethods = () =>
+    this.rpc<MonitoringMethodView[]>(RPC_CHANNELS.GetMonitoringMethods, []);
+  getDummyClient = (uuid: string) =>
+    this.rpc<DummyClientView | null>(RPC_CHANNELS.GetDummyClient, [uuid]);
+  getDummyClientHistory = (uuid: string) =>
+    this.rpc<HistorySample[]>(RPC_CHANNELS.GetDummyClientHistory, [uuid]);
+  /** A terminal's readings, alarms and settings. Its API key is never included. */
+  getFreeKioskTerminal = (uuid: string) =>
+    this.rpc<FreeKioskTerminalView | null>(RPC_CHANNELS.GetFreeKioskTerminal, [uuid]);
+  /** The reading registry: every metric, its section, unit and alarm operators. */
+  getFreeKioskMetrics = () =>
+    this.rpc<FreeKioskMetricCatalog | null>(RPC_CHANNELS.GetFreeKioskMetrics, []);
+  getFreeKioskCommands = () =>
+    this.rpc<FreeKioskCommandDef[]>(RPC_CHANNELS.GetFreeKioskCommands, []);
+  /** Every reading's samples for a terminal, in one call. */
+  getFreeKioskHistory = (uuid: string) =>
+    this.rpc<FreeKioskMetricSeries[]>(RPC_CHANNELS.GetFreeKioskHistory, [uuid]);
+  /** The last 24 hours of the audit log, newest first, filtered by `query`. */
+  getAuditLog = (query: AuditLogQuery) => this.rpc<AuditLogPage>(RPC_CHANNELS.GetAuditLog, [query]);
+
+  /**
+   * Run a monitoring action on a target's checks of one type. `checkIds` null
+   * means every check of that type on the targets.
+   */
+  runMonitoringAction = (
+    targetIds: number[],
+    method: string,
+    actionId: string,
+    params: Record<string, unknown> = {},
+    checkIds: number[] | null = null
+  ) =>
+    this.rpc<ResultTuple<MonitoringActionSummary>>(RPC_CHANNELS.RunMonitoringAction, [
+      targetIds,
+      method,
+      actionId,
+      params,
+      checkIds,
+    ]);
+
+  /** Send a FreeKiosk command, with `{ value }` for a slider. EDIT mode only. */
+  freeKioskCommand = (uuids: string[], commandId: string, args?: Record<string, unknown>) =>
+    this.rpc<ResultTuple<FreeKioskCommandSummary>>(
+      RPC_CHANNELS.FreeKioskCommand,
+      args ? [uuids, commandId, args] : [uuids, commandId]
+    );
+  /** A screenshot of a terminal's screen, as a data URL. EDIT mode only. */
+  freeKioskCaptureScreenshot = (uuid: string) =>
+    this.rpc<ResultTuple<FreeKioskCapture>>(RPC_CHANNELS.FreeKioskCaptureScreenshot, [uuid]);
+  /**
+   * Start streaming a monitor's live audio meters to this session, and answer
+   * the current ones. Frames then arrive as `liveLevels` events until
+   * closeLiveLevels, opening another monitor, or disconnecting. A server
+   * reconnect ends the stream, so open it again on `connect`.
+   *
+   * Paired devices only. A monitor with no streaming checks answers an empty
+   * Checks list. Servers predating the stream never answer; that resolves as
+   * `failed` after a few seconds rather than hanging.
+   */
+  openLiveLevels(targetId: number): Promise<RpcResult<MonitorLiveLevelsSnapshot>> {
+    return new Promise((resolve) => {
+      if (!this.socket || this.state !== 'connected') {
+        resolve({ ok: false, code: 'not_connected' });
+        return;
+      }
+      if (!this.isDevice) {
+        resolve({ ok: false, code: 'forbidden' });
+        return;
+      }
+      let Settled = false;
+      const Timer = setTimeout(() => {
+        if (Settled) return;
+        Settled = true;
+        resolve({ ok: false, code: 'failed' });
+      }, 5000);
+      this.socket.emit('monitorlive:open', targetId, (response: unknown) => {
+        if (Settled) return;
+        Settled = true;
+        clearTimeout(Timer);
+        resolve(ToRpcResult<MonitorLiveLevelsSnapshot>(response));
+      });
+    });
+  }
+
+  /** Stop the live meters this session opened. Safe when none are open. */
+  closeLiveLevels(): void {
+    if (this.socket && this.state === 'connected') this.socket.emit('monitorlive:close');
+  }
+
+  /** Re-poll terminals now rather than at their next interval. */
+  freeKioskRunNow = (uuids: string[]) =>
+    this.rpc<ResultTuple>(RPC_CHANNELS.FreeKioskRunNow, [uuids]);
   getAllAlertRules = () => this.rpc<ResultTuple>(RPC_CHANNELS.GetAllAlertRules, []);
 
   // Identify. Mutates nothing and is deliberately allowed in SHOW mode — it is
@@ -781,6 +1034,9 @@ export class ShowTrakControlClient {
       // Mode is half of every management capability, so a UI driven by
       // getCapabilities() has to re-read when it flips.
       this.emit('capabilitiesChanged');
+      // A probe made in SHOW mode could not see the management permissions
+      // (see refreshCapabilities), so look again now that it can.
+      if (this.mode === 'EDIT' && this.isDevice) void this.refreshCapabilities().catch(() => {});
     });
 
     // The device's pairing was revoked at the desk. Reconnecting will only be
@@ -797,9 +1053,46 @@ export class ShowTrakControlClient {
       this.emit('scriptExecutionsChanged', this.scriptExecutions);
     });
 
+    socket.on('MonitorLiveLevels:Frames', (snapshot: MonitorLiveLevelsSnapshot) => {
+      if (snapshot && typeof snapshot === 'object') this.emit('liveLevels', snapshot);
+    });
+
     socket.on('AlertActionsUpdated', (enabled: boolean) => {
       this.alertsEnabled = !!enabled;
       this.emit('alertsChanged', this.alertsEnabled);
+    });
+
+    // The whole list every time, so a device that connects late still sees the
+    // devices already waiting.
+    socket.on('SetDevicesPendingAdoption', (devices: PendingAdoptionView[]) => {
+      this.pendingAdoption = Array.isArray(devices)
+        ? devices.filter((Device) => Device && typeof Device.UUID === 'string')
+        : [];
+      this.emit('pendingAdoptionChanged', this.pendingAdoption);
+    });
+
+    socket.on('CreateShowTrakAlert', (alert: ShowTrakAlert) => {
+      if (alert && typeof alert === 'object') this.emit('alert', alert);
+    });
+    socket.on('PlaySound', (name: AlertSoundName) => {
+      if (typeof name === 'string') this.emit('playSound', name);
+    });
+    socket.on('PlayCustomAudio', (audio: CustomAlertAudio) => {
+      if (audio && typeof audio === 'object') this.emit('playCustomAudio', audio);
+    });
+    socket.on('AudioAssetsUpdated', () => this.emit('audioAssetsChanged'));
+    socket.on('SetFullMonitoringActionFavouriteList', (list: MonitoringActionFavouriteView[]) => {
+      this.favourites = Array.isArray(list) ? list : [];
+      this.emit('favouritesChanged', this.favourites);
+    });
+    socket.on('SetFullAlertRuleList', (rules: AlertRuleView[]) => {
+      this.alertRules = Array.isArray(rules) ? rules : [];
+      this.emit('alertRulesChanged', this.alertRules);
+    });
+    socket.on('AuditLogAppended', (entry: unknown) => this.emit('auditLogAppended', entry));
+    socket.on('UpdateSettings', (settings: PublicSetting[]) => {
+      this.publicSettings = Array.isArray(settings) ? settings : [];
+      this.emit('settingsChanged', this.publicSettings);
     });
 
     socket.on('Notify', (message: string, type?: string, duration?: number) => {

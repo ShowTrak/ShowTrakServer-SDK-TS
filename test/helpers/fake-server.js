@@ -39,6 +39,9 @@ export async function startFakeServer(options = {}) {
   const rpcCalls = [];
   /** Every pairing attempt's auth payload, in order. */
   const pairAttempts = [];
+  /** Live-level opens (their target ids) and closes, in order. */
+  const liveOpens = [];
+  const liveCloses = [];
   /** Sockets currently connected to the namespace. */
   const sockets = new Set();
 
@@ -91,6 +94,16 @@ export async function startFakeServer(options = {}) {
       if (typeof ack === 'function') ack(result);
     });
 
+    // Live levels: device sessions only, answered with options.liveLevels.
+    socket.on('monitorlive:open', (targetId, ack) => {
+      liveOpens.push(targetId);
+      if (socket.data.authMode !== 'device') return ack && ack({ error: 'forbidden' });
+      if (typeof ack === 'function') {
+        ack({ result: options.liveLevels || { TargetID: targetId, Checks: [] } });
+      }
+    });
+    socket.on('monitorlive:close', () => liveCloses.push(true));
+
     socket.on('rpc', (channel, args, ack) => {
       rpcCalls.push({ channel, args });
       // Device-token sessions only, exactly as the real namespace enforces.
@@ -110,6 +123,8 @@ export async function startFakeServer(options = {}) {
     commands,
     rpcCalls,
     pairAttempts,
+    liveOpens,
+    liveCloses,
     deviceToken,
     /** Push an event to every connected SDK socket. */
     push(event, ...args) {

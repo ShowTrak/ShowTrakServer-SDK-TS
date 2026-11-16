@@ -18,10 +18,13 @@ export {
   type PairFailure,
   type PairErrorCode,
 } from './pairing.js';
+export * from './scripts.js';
+export * from './entities.js';
 export {
   ShowTrakControlClient,
   DeriveClientStatus,
   ClientLabel,
+  ScopeCoversClient,
   type ConnectOptions,
   type ConnectionState,
 } from './client.js';

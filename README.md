@@ -133,6 +133,25 @@ server acknowledges it.
 
 Targeted variants take the slug first: `runScriptOnGroup(groupSlug, scriptSlug)`.
 
+## Live levels
+
+A paired device can stream a monitor's live audio meters while it shows them.
+Only check types that read meters stream any (the TASCAM MX-8A, with live levels
+turned on in its check):
+
+```ts
+const off = client.on('liveLevels', (snapshot) => draw(snapshot.Checks));
+const first = await client.openLiveLevels(targetId); // the current meters
+// ...
+client.closeLiveLevels();
+off();
+```
+
+Levels are dBFS per channel, `null` for no signal. Close the stream when the
+meters leave the screen: a held stream can keep the device's only control
+connection busy. A reconnect ends it, so open it again on `connect`. API-key
+sessions are refused, as for `rpc`.
+
 ## Helpers and constants
 
 ```ts
@@ -149,6 +168,30 @@ import {
 `COLOUR_PALETTE` is the 8-colour palette scripts and tags index into, and the
 status helpers resolve the same colours the ShowTrak UI paints — so an
 integration can match the server's appearance exactly.
+
+### Script targeting
+
+The desktop only offers a script on clients that can run it: the script must be
+enabled, support the client's OS and be admitted by its whitelist. The same rules
+are exported so an integration offers what the desk would:
+
+```ts
+import {
+  ResolveScriptTargets,
+  GetScriptSkipReason,
+  ScriptConfirmation,
+} from '@showtrak/server-sdk';
+
+const Tags = client.getTags();
+for (const Script of client.getScripts()) {
+  const Targets = ResolveScriptTargets(Script, Selected, Tags); // empty: don't offer it
+  const Level = ScriptConfirmation(Script); // 'None' | 'Standard' | 'Critical'
+}
+```
+
+`GetScriptSkipReason` says why one client is left out (`Unsupported`, `Disabled`
+or `Offline`). These are a usability guard; the server re-checks the whitelist
+on dispatch.
 
 ## Licence
 
