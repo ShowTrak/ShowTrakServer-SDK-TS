@@ -1,12 +1,27 @@
+<div align="center">
+
+<a href="https://showtrak.co.uk"><img src="https://showtrak.co.uk/images/logo.png" alt="ShowTrak Server SDK logo" width="128" height="128"></a>
+
 # ShowTrak Server SDK
 
-TypeScript SDK for controlling a [ShowTrak Server][showtrak] instance in real
-time over its WebSocket control API.
+**Control ShowTrak Server from your own TypeScript and JavaScript apps.**
 
-Connect to a running server, send commands, and read live status that stays in
-sync through server pushes — with full type definitions throughout.
+[Website](https://showtrak.co.uk) · [npm](https://www.npmjs.com/package/@showtrak/server-sdk) · [Discord](https://discord.gg/DACmwsbSGW)
 
-[showtrak]: https://showtrak.co.uk
+[![Node.js 20+][badge-node]](https://www.npmjs.com/package/@showtrak/server-sdk) [![TypeScript][badge-typescript]](https://www.npmjs.com/package/@showtrak/server-sdk)
+
+</div>
+
+The official SDK for [ShowTrak Server](https://github.com/ShowTrak/ShowTrakServer)'s control API. It powers
+the [Bitfocus Companion module](https://github.com/bitfocus/companion-module-showtrak-server) and
+ShowTrak Remote, and lets you build your own dashboards, show-control bridges and automations.
+
+## Key features
+
+- **Live state**: clients, groups, monitors and alerts stay in sync through server pushes.
+- **Every action**: run scripts, wake and identify machines, run monitor actions, switch Show and Edit mode and more.
+- **Fully typed**: type definitions for every command, event and payload.
+- **Works with older servers**: checks what the connected server supports, so one build talks to several server versions.
 
 ## Install
 
@@ -252,9 +267,24 @@ for (const Script of client.getScripts()) {
 or `Offline`). These are a usability guard; the server re-checks the whitelist
 on dispatch.
 
+## Part of ShowTrak
+
+| App                                                           | What it does                                                                |
+| ------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| **[ShowTrak Server](https://showtrak.co.uk/software/server)** | Monitor and control every computer and show device from one screen.         |
+| **[ShowTrak Client](https://showtrak.co.uk/software/client)** | The lightweight app that lets ShowTrak Server watch and control a computer. |
+| **[ShowTrak Timers](https://showtrak.co.uk/software/timers)** | Show timers run from the desk, a Stream Deck, QLab or any browser.          |
+| **[ShowTrak Portal](https://showtrak.co.uk)**                 | Show reports, schedules and team collaboration for live productions.        |
+
+Find everything at **[showtrak.co.uk](https://showtrak.co.uk)**.
+
+## Support
+
+Questions, ideas or problems? Join the [ShowTrak Discord](https://discord.gg/DACmwsbSGW) or [open an issue](https://github.com/ShowTrak/ShowTrakServer-SDK-TS/issues).
+
 ## Licence
 
-MIT © ShowTrak. See [LICENSE](./LICENSE).
+The ShowTrak Server SDK is open source under the [MIT licence](LICENSE).
 
-Note that the ShowTrak Server application itself is licensed separately under
-AGPL-3.0-only; this SDK is MIT so integrations can use it freely.
+[badge-node]: https://img.shields.io/badge/Node.js%2020%2B-5FA04E?style=for-the-badge&logo=nodedotjs&logoColor=white
+[badge-typescript]: https://img.shields.io/badge/TypeScript-3178C6?style=for-the-badge&logo=typescript&logoColor=white
