@@ -49,10 +49,79 @@ const COMMANDS = [
   ['enterEditMode', [], 'mode.set', { mode: 'EDIT' }],
   ['toggleMode', [], 'mode.toggle', {}],
 
-  // Expanded / Compact view
-  ['enterCompactView', [], 'view.set', { compact: true }],
-  ['enterExpandedView', [], 'view.set', { compact: false }],
+  // Client-list layout. `mode` replaced the `compact` flag in 1.8; servers
+  // still read the old flag, so earlier SDKs keep working.
+  ['setView', ['list'], 'view.set', { mode: 'list' }],
+  ['enterCompactView', [], 'view.set', { mode: 'compact' }],
+  ['enterExpandedView', [], 'view.set', { mode: 'grid' }],
+  ['enterListView', [], 'view.set', { mode: 'list' }],
   ['toggleView', [], 'view.toggle', {}],
+
+  // Monitoring check actions
+  [
+    'runActionOnMonitor',
+    ['proj', 'pjlink', 'power.on'],
+    'monitor.action',
+    { slug: 'proj', method: 'pjlink', actionId: 'power.on' },
+  ],
+  [
+    'runActionOnMonitor',
+    ['proj', 'pjlink', 'input.set', '31'],
+    'monitor.action',
+    { slug: 'proj', method: 'pjlink', actionId: 'input.set', value: '31' },
+  ],
+  [
+    'runActionOnMonitor',
+    ['proj', 'pjlink', 'power.on', ''],
+    'monitor.action',
+    { slug: 'proj', method: 'pjlink', actionId: 'power.on' },
+  ],
+  [
+    'runActionOnMonitor',
+    ['wing', 'behringer-wing', 'mute', undefined, { Strip: 'ch.1', Mute: true }],
+    'monitor.action',
+    {
+      slug: 'wing',
+      method: 'behringer-wing',
+      actionId: 'mute',
+      params: { Strip: 'ch.1', Mute: true },
+    },
+  ],
+
+  // FreeKiosk terminal commands. A blank value stays off the wire, so a
+  // Companion field left empty reads as "no value", not as an empty one.
+  [
+    'runFreeKioskCommandOnTerminal',
+    ['lobby', 'reboot'],
+    'freekiosk.terminal',
+    { slug: 'lobby', commandId: 'reboot' },
+  ],
+  [
+    'runFreeKioskCommandOnTerminal',
+    ['lobby', 'reload', '  '],
+    'freekiosk.terminal',
+    { slug: 'lobby', commandId: 'reload' },
+  ],
+  [
+    'runFreeKioskCommandOnGroup',
+    ['foyer', 'brightness', 40],
+    'freekiosk.group',
+    { slug: 'foyer', commandId: 'brightness', value: 40 },
+  ],
+  [
+    'runFreeKioskCommandOnTag',
+    ['kiosks', 'volume', '20'],
+    'freekiosk.tag',
+    { slug: 'kiosks', commandId: 'volume', value: '20' },
+  ],
+  ['runFreeKioskCommandOnAll', ['screen.off'], 'freekiosk.all', { commandId: 'screen.off' }],
+
+  // Dummy clients
+  ['sendDummyHeartbeat', ['proj'], 'dummy.heartbeat', { slug: 'proj' }],
+
+  // The execution panel
+  ['retryFailedExecutions', [], 'executions.retryFailed', {}],
+  ['clearSettledExecutions', [], 'executions.clearSettled', {}],
 
   // Identify — the one command safe in SHOW mode, because it mutates nothing.
   ['identify', ['foh'], 'identify.client', { slug: 'foh' }],

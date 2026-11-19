@@ -64,18 +64,30 @@ const off = client.on('clientsChanged', () => refreshUI());
 off(); // stop listening
 ```
 
-| Event            | Payload                       | Fires when                    |
-| ---------------- | ----------------------------- | ----------------------------- |
-| `connect`        | —                             | The session is established    |
-| `disconnect`     | `reason`                      | The session drops             |
-| `error`          | `message`                     | Auth or transport fails       |
-| `stateChanged`   | `state`                       | Connection state transitions  |
-| `clientsChanged` | —                             | Any client's state changes    |
-| `tagsChanged`    | —                             | Tags are added/removed/edited |
-| `scriptsChanged` | —                             | The script list changes       |
-| `modeChanged`    | `mode`                        | The server enters SHOW/EDIT   |
-| `alertsChanged`  | `enabled`                     | Alerts are toggled            |
-| `notify`         | `message`, `type`, `duration` | The server raises a toast     |
+| Event                     | Payload                       | Fires when                                |
+| ------------------------- | ----------------------------- | ----------------------------------------- |
+| `connect`                 | —                             | The session is established                |
+| `disconnect`              | `reason`                      | The session drops                         |
+| `error`                   | `message`                     | Auth or transport fails                   |
+| `stateChanged`            | `state`                       | Connection state transitions              |
+| `clientsChanged`          | —                             | Any client's state changes                |
+| `tagsChanged`             | —                             | Tags are added/removed/edited             |
+| `scriptsChanged`          | —                             | The script list changes                   |
+| `modeChanged`             | `mode`                        | The server enters SHOW/EDIT               |
+| `alertsChanged`           | `enabled`                     | Alerts are toggled                        |
+| `scriptExecutionsChanged` | `executions`                  | A script or event starts, moves on, ends  |
+| `pendingAdoptionChanged`  | `devices`                     | A device starts or stops waiting to adopt |
+| `alert`                   | `alert`                       | An alert rule raises a ShowTrak alert     |
+| `notify`                  | `message`, `type`, `duration` | The server raises a toast                 |
+
+Paired devices also get `playSound`, `playCustomAudio`, `audioAssetsChanged`,
+`favouritesChanged`, `alertRulesChanged`, `auditLogAppended`, `settingsChanged`,
+`liveLevels`, `capabilitiesChanged` and `revoked`. From server 3.34 the sound,
+favourite, rule, audit and settings pushes go to device sessions only.
+
+`clientsChanged` fires once per client update, and a busy show sends several a
+second. An integration that redraws everything on it (a button surface, a
+variable table) should coalesce the bursts rather than redraw per event.
 
 A throwing listener never blocks the others.
 
@@ -108,6 +120,9 @@ client.getAllStatus(); // whole workspace
 client.getGroups();
 client.getTags();
 client.getScripts();
+client.getScriptExecutions(); // the execution panel, in server order
+client.getExecutionsForClient('stage-left');
+client.getPendingAdoption(); // devices waiting to be adopted
 client.getMode(); // 'SHOW' | 'EDIT'
 client.getAlertsEnabled();
 client.getState(); // 'disconnected' | 'connecting' | ...
@@ -119,19 +134,43 @@ client.isConnected();
 Every command returns `Promise<CommandResult>` (`{ ok, detail }`) once the
 server acknowledges it.
 
-| Area        | Methods                                                                                 |
-| ----------- | --------------------------------------------------------------------------------------- |
-| Wake-on-LAN | `wolAll`, `wolClient`, `wolGroup`, `wolTag`                                             |
-| Scripts     | `runScriptOnAll`, `runScriptOnClient`, `runScriptOnGroup`, `runScriptOnTag`             |
-| Events      | `triggerEventOnAll`, `triggerEventOnClient`, `triggerEventOnGroup`, `triggerEventOnTag` |
-| Alerts      | `alertsOn`, `alertsOff`, `alertsToggle`                                                 |
-| Mode        | `enterShowMode`, `enterEditMode`, `toggleMode`                                          |
-| View        | `enterCompactView`, `enterExpandedView`, `toggleView`                                   |
-| Modals      | `openClientModal`, `closeAllModals`                                                     |
-| Show        | `saveShow`                                                                              |
-| System      | `shutdownServer`, `forceShutdownServer`                                                 |
+| Area        | Methods                                                                                                               |
+| ----------- | --------------------------------------------------------------------------------------------------------------------- |
+| Wake-on-LAN | `wolAll`, `wolClient`, `wolGroup`, `wolTag`                                                                           |
+| Scripts     | `runScriptOnAll`, `runScriptOnClient`, `runScriptOnGroup`, `runScriptOnTag`                                           |
+| Events      | `triggerEventOnAll`, `triggerEventOnClient`, `triggerEventOnGroup`, `triggerEventOnTag`                               |
+| Executions  | `retryFailedExecutions`, `clearSettledExecutions`                                                                     |
+| Monitors    | `runActionOnMonitor`                                                                                                  |
+| FreeKiosk   | `runFreeKioskCommandOnTerminal`, `runFreeKioskCommandOnGroup`, `runFreeKioskCommandOnTag`, `runFreeKioskCommandOnAll` |
+| Dummies     | `sendDummyHeartbeat`                                                                                                  |
+| Identify    | `identify`, `stopIdentify`                                                                                            |
+| Alerts      | `alertsOn`, `alertsOff`, `alertsToggle`                                                                               |
+| Mode        | `enterShowMode`, `enterEditMode`, `toggleMode`                                                                        |
+| View        | `setView`, `enterExpandedView`, `enterCompactView`, `enterListView`, `toggleView`                                     |
+| Modals      | `openClientModal`, `closeAllModals`                                                                                   |
+| Show        | `saveShow`                                                                                                            |
+| System      | `shutdownServer`, `forceShutdownServer`                                                                               |
 
 Targeted variants take the slug first: `runScriptOnGroup(groupSlug, scriptSlug)`.
+
+```ts
+await client.runActionOnMonitor('proj-sl', 'pjlink', 'power.on');
+await client.runActionOnMonitor('proj-sl', 'pjlink', 'input.set', '31'); // first parameter
+await client.runFreeKioskCommandOnGroup('foyer', 'brightness', 40);
+await client.setView('list'); // 'grid' | 'compact' | 'list'
+```
+
+Monitor actions, FreeKiosk commands and dummy heartbeats are the same verbs the
+server's OSC API offers (`/API/Monitor/...`, `/API/FreeKiosk/...`,
+`/API/Dummy/.../Heartbeat`). A monitor action's IDs are listed in the server's
+OSC/API reference; `FREEKIOSK_COMMANDS` lists the FreeKiosk ones.
+
+### Server versions
+
+Commands are additive, so a server older than this SDK answers one it does not
+know with `{ ok: false, detail: 'Unknown command "..."' }` instead of failing
+the session. Server 3.34 added the view, monitor, FreeKiosk, dummy and
+execution commands; earlier servers declared but ignored `view.*`.
 
 ## Live levels
 
@@ -168,6 +207,26 @@ import {
 `COLOUR_PALETTE` is the 8-colour palette scripts and tags index into, and the
 status helpers resolve the same colours the ShowTrak UI paints — so an
 integration can match the server's appearance exactly.
+
+`FREEKIOSK_COMMANDS` lists the FreeKiosk commands the server accepts, with the
+value each takes (brightness and volume, 0–100), for building a picker without
+the device-only `getFreeKioskCommands()`.
+
+### Script executions
+
+`IsRetryableExecution` says whether the server would retry an execution, and
+`SummariseExecutions` counts a list the way the desktop's execution panel does:
+
+```ts
+import { SummariseExecutions } from '@showtrak/server-sdk';
+
+const { Pending, Failed, Retryable } = SummariseExecutions(client.getScriptExecutions());
+if (Retryable) await client.retryFailedExecutions();
+```
+
+Housekeeping (script deployment, Wake-on-LAN) is left out of the counts unless
+`{ includeInternal: true }` is passed. Paired devices can read an execution's
+console with `getExecutionOutput(requestId, afterSeq)`.
 
 ### Script targeting
 

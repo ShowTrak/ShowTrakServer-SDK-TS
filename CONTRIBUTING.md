@@ -10,11 +10,13 @@ This SDK is standalone: the ShowTrak Server does **not** import it, so
 `src/constants.ts` is a hand-maintained mirror of the server's authoritative
 values. When these change on the server, update them here too:
 
-| Constant       | Server source                         |
-| -------------- | ------------------------------------- |
-| Ports          | `src/Modules/Config/constants.ts`     |
-| Colour palette | `src/Modules/ScriptManager/schema.ts` |
-| Status colours | `src/UI/css/parts/01-base.css`        |
+| Constant                                      | Server source                                 |
+| --------------------------------------------- | --------------------------------------------- |
+| Ports                                         | `src/Modules/Config/constants.ts`             |
+| Colour palette                                | `src/Modules/ScriptManager/schema.ts`         |
+| Status colours                                | `src/UI/css/parts/01-base.css`                |
+| FreeKiosk commands (`src/freekiosk.ts`)       | `src/Modules/FreeKiosk/commands.ts`           |
+| Execution retry rule (`IsRetryableExecution`) | `src/Modules/ScriptExecutionManager/retry.ts` |
 
 ## Testing
 
@@ -36,6 +38,8 @@ import, not the TypeScript source.
 | `client-cache.test.js`       | Client/monitor/dummy cache isolation, re-slugging, bad pushes |
 | `client-aggregation.test.js` | Group / tag / workspace status rollup                         |
 | `client-commands.test.js`    | Every command method's wire name + args, and ack handling     |
+| `script-executions.test.js`  | The execution list, retry rule, counts and console rpc        |
+| `freekiosk-commands.test.js` | The FreeKiosk command catalog                                 |
 
 Connection-level tests run against a **real Socket.IO server** on an ephemeral
 port ([`test/helpers/fake-server.js`](./test/helpers/fake-server.js)) that

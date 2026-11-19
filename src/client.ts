@@ -48,6 +48,7 @@ import type {
   MonitorLiveLevelsSnapshot,
   MonitoringMethodView,
   MonitoringTargetView,
+  ExecutionOutputView,
 } from './entities.js';
 import type {
   AppMode,
@@ -62,6 +63,7 @@ import type {
   ScriptExecutionView,
   TagScope,
   TagView,
+  ViewMode,
 } from './protocol.js';
 
 interface ConnectOptionsBase {
@@ -127,8 +129,10 @@ interface Events {
   /** The live script-execution list changed — one started, moved on, or ended. */
   scriptExecutionsChanged: [executions: ScriptExecutionView[]];
   notify: [message: string, type: string, duration: number];
-  /** An alert rule raised a ShowTrak alert. Paired devices only. */
+  /** An alert rule raised a ShowTrak alert. Every session, integrations included. */
   alert: [alert: ShowTrakAlert];
+  // The events below are for paired devices. Servers from 3.34 send them to
+  // device sessions only; earlier ones sent them to every session.
   /** An alert rule asked for one of the built-in sounds. */
   playSound: [name: AlertSoundName];
   /** An alert rule asked for a custom sound; its audio comes inline. */
@@ -267,6 +271,13 @@ export function ScopeCoversClient(
     if (ScopeCoversClient(nested.Scope, client, tags, visited)) return true;
   }
   return false;
+}
+
+/** An optional command value, left off the wire when absent or blank. */
+function WithValue(value: string | number | undefined): { value?: string | number } {
+  if (value === undefined || value === null) return {};
+  if (typeof value === 'string' && value.trim() === '') return {};
+  return { value };
 }
 
 export class ShowTrakControlClient {
@@ -540,14 +551,6 @@ export class ShowTrakControlClient {
     return Array.from(this.scriptsById.values());
   }
 
-  /**
-   * Script executions the server currently knows about, in its own order.
-   *
-   * Includes settled ones: the server keeps a finished execution in the list so
-   * an operator can see what a run did, and clears it on its own schedule. A UI
-   * that only wants live work should filter on `Status === 'Pending'` rather
-   * than expect this to empty itself.
-   */
   /** Starred monitoring actions, newest list from the server. Paired devices only. */
   getMonitoringFavourites(): MonitoringActionFavouriteView[] {
     return this.favourites;
@@ -563,6 +566,24 @@ export class ShowTrakControlClient {
     return this.publicSettings;
   }
 
+  /**
+   * The executions running, queued or finished on one client, in panel order.
+   * Empty for a slug that does not name a client.
+   */
+  getExecutionsForClient(slug: string): ScriptExecutionView[] {
+    const Client = this.getClient(slug);
+    if (!Client) return [];
+    return this.scriptExecutions.filter((Execution) => Execution.Client?.UUID === Client.UUID);
+  }
+
+  /**
+   * Script executions the server currently knows about, in its own order.
+   *
+   * Includes settled ones: the server keeps a finished execution in the list so
+   * an operator can see what a run did, and clears it on its own schedule. A UI
+   * that only wants live work should filter on `Status === 'Pending'` rather
+   * than expect this to empty itself.
+   */
   getScriptExecutions(): ScriptExecutionView[] {
     return this.scriptExecutions;
   }
@@ -636,10 +657,69 @@ export class ShowTrakControlClient {
   enterEditMode = (): Promise<CommandResult> => this.command('mode.set', { mode: 'EDIT' });
   toggleMode = (): Promise<CommandResult> => this.command('mode.toggle', {});
 
-  // Expanded / Compact view
-  enterCompactView = (): Promise<CommandResult> => this.command('view.set', { compact: true });
-  enterExpandedView = (): Promise<CommandResult> => this.command('view.set', { compact: false });
+  // Client-list layout. Applied by the desktop and by every Web UI browser.
+  // Servers before 3.34 answer these with "Unknown command".
+  setView = (mode: ViewMode): Promise<CommandResult> => this.command('view.set', { mode });
+  enterCompactView = (): Promise<CommandResult> => this.setView('compact');
+  /** The full-size tiles (the "grid" layout). */
+  enterExpandedView = (): Promise<CommandResult> => this.setView('grid');
+  enterListView = (): Promise<CommandResult> => this.setView('list');
+  /** Compact on or off. */
   toggleView = (): Promise<CommandResult> => this.command('view.toggle', {});
+
+  // Monitoring check actions (method = check type, e.g. `pjlink`; actionId =
+  // one of its actions, e.g. `input.set`). `value` fills the action's first
+  // parameter; `params` names any of them. Server 3.34+.
+  runActionOnMonitor = (
+    slug: string,
+    method: string,
+    actionId: string,
+    value?: string | number,
+    params?: Record<string, unknown>
+  ): Promise<CommandResult> =>
+    this.command('monitor.action', {
+      slug,
+      method,
+      actionId,
+      ...WithValue(value),
+      ...(params ? { params } : {}),
+    });
+
+  // FreeKiosk terminal commands (commandId from FREEKIOSK_COMMANDS; `value` for
+  // brightness and volume, 0-100). Server 3.34+.
+  runFreeKioskCommandOnTerminal = (
+    slug: string,
+    commandId: string,
+    value?: string | number
+  ): Promise<CommandResult> =>
+    this.command('freekiosk.terminal', { slug, commandId, ...WithValue(value) });
+  runFreeKioskCommandOnGroup = (
+    slug: string,
+    commandId: string,
+    value?: string | number
+  ): Promise<CommandResult> =>
+    this.command('freekiosk.group', { slug, commandId, ...WithValue(value) });
+  runFreeKioskCommandOnTag = (
+    slug: string,
+    commandId: string,
+    value?: string | number
+  ): Promise<CommandResult> =>
+    this.command('freekiosk.tag', { slug, commandId, ...WithValue(value) });
+  runFreeKioskCommandOnAll = (commandId: string, value?: string | number): Promise<CommandResult> =>
+    this.command('freekiosk.all', { commandId, ...WithValue(value) });
+
+  // Dummy clients: deliver a heartbeat, as OSC /API/Dummy/<slug>/Heartbeat
+  // does. The integration's own address is not recorded as the dummy's IP.
+  // Server 3.34+.
+  sendDummyHeartbeat = (slug: string): Promise<CommandResult> =>
+    this.command('dummy.heartbeat', { slug });
+
+  // The execution panel. Retry re-runs every failed execution the server can
+  // retry (see IsRetryableExecution); clear drops finished rows and leaves
+  // anything queued or running. Server 3.34+.
+  retryFailedExecutions = (): Promise<CommandResult> => this.command('executions.retryFailed', {});
+  clearSettledExecutions = (): Promise<CommandResult> =>
+    this.command('executions.clearSettled', {});
 
   // Modals — these drive the desktop app's window only; the web UI ignores them.
   openClientModal = (slug: string): Promise<CommandResult> =>
@@ -923,6 +1003,24 @@ export class ShowTrakControlClient {
   closeLiveLevels(): void {
     if (this.socket && this.state === 'connected') this.socket.emit('monitorlive:close');
   }
+
+  /**
+   * Retry these failed executions, by RequestID. Rows that cannot be retried are
+   * left alone. Remote script permission (off by default). Server 3.32+.
+   */
+  retryExecutions = (requestIds: string[]) =>
+    this.rpc<ResultTuple<{ Retried: number }>>(RPC_CHANNELS.RetryExecutions, [requestIds]);
+
+  /**
+   * An execution's console: the entries after `afterSeq` (0 for everything the
+   * server kept). Poll with the answer's LastSeq while it is on screen; nothing
+   * is pushed. Remote script permission. Server 3.32+.
+   */
+  getExecutionOutput = (requestId: string, afterSeq = 0) =>
+    this.rpc<ResultTuple<ExecutionOutputView>>(RPC_CHANNELS.GetExecutionOutput, [
+      requestId,
+      afterSeq,
+    ]);
 
   /** Re-poll terminals now rather than at their next interval. */
   freeKioskRunNow = (uuids: string[]) =>

@@ -8,7 +8,13 @@
 // will run on the wrong machine.
 
 import { ScopeCoversClient } from './client.js';
-import type { ClientView, ScriptConfirmationLevel, ScriptView, TagView } from './protocol.js';
+import type {
+  ClientView,
+  ScriptConfirmationLevel,
+  ScriptExecutionView,
+  ScriptView,
+  TagView,
+} from './protocol.js';
 
 /** The script fields the targeting rules read. */
 type TargetableScript = Pick<ScriptView, 'CompatiblePlatforms' | 'Whitelist' | 'isEnabled'>;
@@ -91,4 +97,69 @@ export function ScriptConfirmation(
 ): ScriptConfirmationLevel {
   if (script.ConfirmationLevel) return script.ConfirmationLevel;
   return script.Confirmation ? 'Standard' : 'None';
+}
+
+// --- Script executions -------------------------------------------------------
+
+/** Name prefix the server gives an integrated client's event when it runs as an execution. */
+const INTEGRATED_EVENT_PREFIX = 'Integrated Event: ';
+
+/**
+ * Whether the server would retry this execution (retryFailedExecutions, or the
+ * desktop panel's Retry button).
+ *
+ * Mirrors the server's rule: a failed script run, or a failed integrated-client
+ * event. Script deployments retry themselves, and other internal work (Wake on
+ * LAN, shutdown, updates) does not record what it sent, so neither is offered.
+ */
+export function IsRetryableExecution(
+  execution:
+    Pick<ScriptExecutionView, 'Status' | 'Internal' | 'Client' | 'Script'> | null | undefined
+): boolean {
+  if (!execution || execution.Status !== 'Failed') return false;
+  if (!execution.Client || !execution.Client.UUID || !execution.Script) return false;
+  if (!execution.Internal) return !!execution.Script.ID;
+  const Name = typeof execution.Script.Name === 'string' ? execution.Script.Name : '';
+  return Name.startsWith(INTEGRATED_EVENT_PREFIX) && Name.length > INTEGRATED_EVENT_PREFIX.length;
+}
+
+/** Counts across an execution list, as the desktop panel's header reads them. */
+export interface ExecutionSummary {
+  /** Queued or running: the server does not tell the two apart by status. */
+  Pending: number;
+  Completed: number;
+  Failed: number;
+  /** Failures the server would retry. */
+  Retryable: number;
+  Total: number;
+}
+
+/**
+ * Count an execution list by status.
+ *
+ * Internal executions (script deployments, Wake on LAN and other housekeeping)
+ * are left out unless `includeInternal` is set, because an operator did not ask
+ * for them; integrated-client events are internal too, but are always counted,
+ * since they are an operator's own action.
+ */
+export function SummariseExecutions(
+  executions: readonly ScriptExecutionView[],
+  options: { includeInternal?: boolean } = {}
+): ExecutionSummary {
+  const Summary: ExecutionSummary = { Pending: 0, Completed: 0, Failed: 0, Retryable: 0, Total: 0 };
+  for (const Execution of executions || []) {
+    if (!Execution) continue;
+    const IsEvent =
+      typeof Execution.Script?.Name === 'string' &&
+      Execution.Script.Name.startsWith(INTEGRATED_EVENT_PREFIX);
+    if (Execution.Internal && !IsEvent && !options.includeInternal) continue;
+    Summary.Total++;
+    if (Execution.Status === 'Pending') Summary.Pending++;
+    else if (Execution.Status === 'Completed') Summary.Completed++;
+    else if (Execution.Status === 'Failed') {
+      Summary.Failed++;
+      if (IsRetryableExecution(Execution)) Summary.Retryable++;
+    }
+  }
+  return Summary;
 }

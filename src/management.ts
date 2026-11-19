@@ -174,6 +174,10 @@ export const RPC_CHANNELS = {
   // not gated on EDIT mode.
   SetClientAudioLevel: 'SetClientAudioLevel',
   TriggerIntegratedEvent: 'TriggerIntegratedEvent',
+  // The execution panel. Same permission. Server 3.32+.
+  RetryExecutions: 'Scripts:RetryExecutions',
+  GetExecutionOutput: 'Scripts:GetExecutionOutput',
+  ClearSettledExecutions: 'Scripts:ClearSettledExecutions',
 
   // Identify — safe in SHOW mode; it draws an overlay and mutates nothing.
   IdentifyClient: 'IdentifyClient',

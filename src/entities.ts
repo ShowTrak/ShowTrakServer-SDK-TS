@@ -234,6 +234,38 @@ export interface FreeKioskCommandDef {
   [key: string]: unknown;
 }
 
+// --- Script execution console ------------------------------------------------
+
+/**
+ * One line of an execution's console history.
+ *
+ * `stage` is a lifecycle step (queued, sent, running), `stdout`/`stderr` is the
+ * script's own output, `tail` is the latest-line sample an older client sends
+ * instead of streaming, and `result` is how it ended (`Error` set on failure).
+ */
+export interface ExecutionLogEntry {
+  Seq: number;
+  Time: number;
+  Kind: 'stage' | 'stdout' | 'stderr' | 'tail' | 'result' | (string & {});
+  Text: string;
+  Error?: boolean;
+}
+
+/** An execution's console entries after the requested Seq, plus where it has got to. */
+export interface ExecutionOutputView {
+  RequestID: string;
+  Status: 'Pending' | 'Failed' | 'Completed';
+  Entries: ExecutionLogEntry[];
+  /** The highest Seq recorded so far: pass it back as the next `afterSeq`. */
+  LastSeq: number;
+  /** Earlier output was dropped to stay under the server's per-execution cap. */
+  Trimmed: boolean;
+  /** Whether the client streamed real console output (false for older clients). */
+  HasStreamOutput: boolean;
+  /** The client stopped sending output after hitting its own cap. */
+  ClientTruncated: boolean;
+}
+
 export interface FreeKioskCommandSummary {
   Total: number;
   Succeeded: number;
@@ -290,7 +322,9 @@ export interface MonitorLiveLevelsSnapshot {
 
 // --- Alerts, sounds, favourites, settings -------------------------------------
 // What the Web UI's alerts tray, sounds and editors live on. Paired devices are
-// sent these on connect (rules, favourites, settings) and on every change.
+// sent these on connect (rules, favourites, settings) and on every change. A
+// raised alert (ShowTrakAlert) reaches every session, integrations included;
+// from server 3.34 the rest are sent to paired devices only.
 
 /** An alert rule fired a "ShowTrak alert" action: a line for the alerts tray. */
 export interface ShowTrakAlert {
@@ -339,8 +373,8 @@ export interface AlertRuleView {
 
 /**
  * A setting a remote surface may read. Only the display keys ever reach a
- * device: UI_GROUP_COLUMN_COUNT, UI_DEFAULT_VIEW, UI_CLEAR_SELECTION_AFTER_ACTION
- * and UI_EXECUTION_PANEL_DWELL_SECONDS.
+ * device: UI_GROUP_COLUMN_COUNT, UI_DEFAULT_VIEW, UI_CLEAR_SELECTION_AFTER_ACTION,
+ * UI_EXECUTION_PANEL_DWELL_SECONDS and (server 3.32+) UI_GROUP_COLOUR_SATURATION.
  */
 export interface PublicSetting {
   Key: string;

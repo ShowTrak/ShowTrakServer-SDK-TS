@@ -133,3 +133,126 @@ test('disconnect drops the list, so nothing reads as running after the session e
 
   assert.deepEqual(client.getScriptExecutions(), []);
 });
+
+// --- Per-client lookups and counts ---------------------------------------------
+
+test('getExecutionsForClient picks one client out of the panel by slug', async (t) => {
+  const { server, client } = await startConnected(t);
+  server.push(
+    'SetFullClientList',
+    [
+      { Type: 'client', UUID: 'a', Slug: 'foh', Online: true },
+      { Type: 'client', UUID: 'b', Slug: 'mon', Online: true },
+    ],
+    []
+  );
+  server.push('UpdateScriptExecutions', [
+    execution({ RequestID: 'r-1' }),
+    execution({ RequestID: 'r-2', Client: { UUID: 'b', Nickname: null, Hostname: null } }),
+    execution({ RequestID: 'r-3', Status: 'Failed' }),
+  ]);
+  await waitFor(() => client.getScriptExecutions().length === 3 && client.getClient('foh'), {
+    label: 'executions and clients',
+  });
+
+  assert.deepEqual(
+    client.getExecutionsForClient('foh').map((E) => E.RequestID),
+    ['r-1', 'r-3']
+  );
+  assert.deepEqual(client.getExecutionsForClient('nope'), []);
+});
+
+test('IsRetryableExecution mirrors the server: failed scripts and integrated events only', async () => {
+  const { IsRetryableExecution } = await import('../dist/index.js');
+  assert.equal(IsRetryableExecution(execution({ Status: 'Failed' })), true);
+  assert.equal(IsRetryableExecution(execution({ Status: 'Completed' })), false);
+  assert.equal(IsRetryableExecution(execution({ Status: 'Pending' })), false);
+  // A deployment is internal and retries itself.
+  assert.equal(
+    IsRetryableExecution(
+      execution({ Status: 'Failed', Internal: true, Script: { ID: 'x', Name: 'Deploy Scripts' } })
+    ),
+    false
+  );
+  assert.equal(
+    IsRetryableExecution(
+      execution({
+        Status: 'Failed',
+        Internal: true,
+        Script: { ID: 'x', Name: 'Integrated Event: go' },
+      })
+    ),
+    true
+  );
+  assert.equal(
+    IsRetryableExecution(execution({ Status: 'Failed', Client: { UUID: null } })),
+    false
+  );
+  assert.equal(IsRetryableExecution(null), false);
+});
+
+test('SummariseExecutions counts what an operator asked for', async () => {
+  const { SummariseExecutions } = await import('../dist/index.js');
+  const List = [
+    execution({ RequestID: '1', Status: 'Pending' }),
+    execution({ RequestID: '2', Status: 'Completed' }),
+    execution({ RequestID: '3', Status: 'Failed' }),
+    execution({
+      RequestID: '4',
+      Status: 'Failed',
+      Internal: true,
+      Script: { ID: 'x', Name: 'Integrated Event: go' },
+    }),
+    // Housekeeping: left out unless asked for.
+    execution({
+      RequestID: '5',
+      Status: 'Failed',
+      Internal: true,
+      Script: { ID: 'deploy', Name: 'Deploy Scripts' },
+    }),
+  ];
+  assert.deepEqual(SummariseExecutions(List), {
+    Pending: 1,
+    Completed: 1,
+    Failed: 2,
+    Retryable: 2,
+    Total: 4,
+  });
+  assert.deepEqual(SummariseExecutions(List, { includeInternal: true }), {
+    Pending: 1,
+    Completed: 1,
+    Failed: 3,
+    Retryable: 2,
+    Total: 5,
+  });
+  assert.deepEqual(SummariseExecutions([]), {
+    Pending: 0,
+    Completed: 0,
+    Failed: 0,
+    Retryable: 0,
+    Total: 0,
+  });
+});
+
+// --- The execution panel over the management bridge (paired devices) -----------
+
+test('retryExecutions and getExecutionOutput reach their server channels', async (t) => {
+  const { startConnectedDevice } = await import('./helpers/fake-server.js');
+  const { server, client } = await startConnectedDevice(t, {
+    onRpc: (channel) =>
+      channel === 'Scripts:GetExecutionOutput'
+        ? { result: [null, { RequestID: 'r-1', Status: 'Pending', Entries: [], LastSeq: 4 }] }
+        : { result: [null, { Retried: 2 }] },
+  });
+
+  const Retry = await client.retryExecutions(['r-1', 'r-2']);
+  assert.deepEqual(Retry, { ok: true, result: [null, { Retried: 2 }] });
+  const Output = await client.getExecutionOutput('r-1', 3);
+  assert.equal(Output.ok, true);
+  assert.equal(Output.result[1].LastSeq, 4);
+
+  assert.deepEqual(server.rpcCalls, [
+    { channel: 'Scripts:RetryExecutions', args: [['r-1', 'r-2']] },
+    { channel: 'Scripts:GetExecutionOutput', args: ['r-1', 3] },
+  ]);
+});

@@ -372,6 +372,14 @@ export interface ScriptView {
 export type AppMode = 'SHOW' | 'EDIT';
 
 /**
+ * The ShowTrak client list's three layouts: tiles, compact tiles, or a table.
+ * Each renderer (the desktop and every Web UI browser) applies a layout change.
+ */
+export type ViewMode = 'grid' | 'compact' | 'list';
+
+export const VIEW_MODES: readonly ViewMode[] = ['grid', 'compact', 'list'] as const;
+
+/**
  * Where a script execution has got to.
  *
  * Note there is no separate "running" state: a queued execution and a running
@@ -438,16 +446,25 @@ export interface PendingAdoptionView {
 export interface ServerPushEvents {
   SetFullClientList: (clients: ClientView[], groups: GroupView[]) => void;
   ClientUpdated: (client: ClientView) => void;
-  // Monitors and dummies as client-shaped views (Type 'monitor' / 'dummy').
+  // Monitors, dummies and FreeKiosk terminals as client-shaped views (Type
+  // 'monitor' / 'dummy' / 'freekiosk').
   SetFullMonitoringTargetList: (monitors: ClientView[]) => void;
   MonitoringTargetUpdated: (monitor: ClientView) => void;
   SetFullDummyClientList: (dummies: ClientView[]) => void;
   DummyClientUpdated: (dummy: ClientView) => void;
+  SetFullFreeKioskTerminalList: (terminals: ClientView[]) => void;
+  FreeKioskTerminalUpdated: (terminal: ClientView) => void;
   SetTagList: (tags: TagView[]) => void;
   SetScriptList: (scripts: ScriptView[]) => void;
   ModeUpdated: (mode: AppMode) => void;
   AlertActionsUpdated: (enabled: boolean) => void;
   Notify: (message: string, type?: string, duration?: number) => void;
+  /**
+   * The whole execution list, on every change. Servers from 3.34 also send it
+   * once on connect, so work already in flight is visible straight away.
+   */
+  UpdateScriptExecutions: (executions: ScriptExecutionView[]) => void;
+  /** Sent once on connect too, to every session from server 3.34 (devices only before). */
   SetDevicesPendingAdoption: (devices: PendingAdoptionView[]) => void;
 }
 
@@ -478,9 +495,25 @@ export type CommandName =
   // Show / Edit mode
   | 'mode.set'
   | 'mode.toggle'
-  // Expanded / Compact view
+  // Client-list layout (grid / compact / list). Servers before 3.34 answer
+  // these with "Unknown command".
   | 'view.set'
   | 'view.toggle'
+  // Monitoring check actions: a projector's power, a console's scene. The same
+  // verbs the OSC /API/Monitor routes offer. Server 3.34+.
+  | 'monitor.action'
+  // FreeKiosk terminal commands (screen, brightness, reload ...), by terminal,
+  // group, tag or every terminal. Server 3.34+.
+  | 'freekiosk.terminal'
+  | 'freekiosk.group'
+  | 'freekiosk.tag'
+  | 'freekiosk.all'
+  // Deliver a heartbeat to a dummy client on behalf of whatever it stands for.
+  // Server 3.34+.
+  | 'dummy.heartbeat'
+  // The execution panel: retry what failed, clear what finished. Server 3.34+.
+  | 'executions.retryFailed'
+  | 'executions.clearSettled'
   // Identify — flashes an overlay on the client's own screen. Mutates nothing
   // and is deliberately available in SHOW mode: it exists for the operator
   // standing at a rack working out which machine is which.
@@ -513,8 +546,33 @@ export interface CommandArgs {
   'alerts.toggle': Record<string, never>;
   'mode.set': { mode: AppMode };
   'mode.toggle': Record<string, never>;
-  'view.set': { compact: boolean };
+  /**
+   * `mode` names the layout. Earlier SDKs sent `{ compact }` instead, which
+   * servers still read as compact vs grid.
+   */
+  'view.set': { mode: ViewMode };
+  /** Compact on or off, as SDK 1.x has always documented it. */
   'view.toggle': Record<string, never>;
+  /**
+   * `value` fills the action's first declared parameter (what a single text
+   * field can address, as the OSC route's trailing value does); `params` names
+   * any of them and wins over `value`. Blank `value` means none.
+   */
+  'monitor.action': {
+    slug: string;
+    method: string;
+    actionId: string;
+    value?: string | number;
+    params?: Record<string, unknown>;
+  };
+  /** `value` fills a command's one parameter (brightness, volume: 0-100). */
+  'freekiosk.terminal': { slug: string; commandId: string; value?: string | number };
+  'freekiosk.group': { slug: string; commandId: string; value?: string | number };
+  'freekiosk.tag': { slug: string; commandId: string; value?: string | number };
+  'freekiosk.all': { commandId: string; value?: string | number };
+  'dummy.heartbeat': { slug: string };
+  'executions.retryFailed': Record<string, never>;
+  'executions.clearSettled': Record<string, never>;
   'identify.client': { slug: string };
   'identify.stop': { slug: string };
   'modal.openClient': { slug: string };

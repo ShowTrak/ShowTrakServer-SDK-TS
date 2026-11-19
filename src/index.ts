@@ -20,6 +20,7 @@ export {
 } from './pairing.js';
 export * from './scripts.js';
 export * from './entities.js';
+export * from './freekiosk.js';
 export {
   ShowTrakControlClient,
   DeriveClientStatus,
